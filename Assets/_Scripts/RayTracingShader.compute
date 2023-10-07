@@ -1,0 +1,307 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture => CameraRaytracer.Render(): line 3 
+
+// Output RenderTexture
+RWTexture2D<float4> Result;
+
+#define MAX_BOUNCES 1
+#define PI 3.14159265
+
+// Camera projection matricies
+float4x4 CameraToWorldMat;
+float4x4 InversePerspectiveProjMat;
+
+bool sunLight;
+float4 Sun;
+
+uint randomState = 2;
+
+// PCG (permuted congruential generator)
+// Thanks to: www.youtube.com/@SebastianLague
+// www.pcg-random.org and www.shadertoy.com/view/XlGcRh
+float random(inout uint seed){
+	seed = seed * 747796405 + 2891336453;
+	uint result = ((seed >> ((seed >> 28) + 4)) ^ seed) * 277803737;
+	result = (result >> 22) ^ result;
+	return result / 4294967295.0;
+}
+
+float randomNormal(inout uint seed){
+	float theta = 2 * 3.14159 * random(seed);
+	float rho = sqrt(-2 * log(random(seed)));
+	return rho * cos(theta);
+}
+
+float3 randomDirection(inout uint seed, float3 normal){
+	float x = randomNormal(seed);
+	float y = randomNormal(seed);
+	float z = randomNormal(seed);
+	float3 v = normalize(float3(x,y,z));
+	float dotp = dot(v,normal);
+	return v * sign(dotp);
+}
+
+struct PMaterial{
+	float3 albedo;
+	float smoothness;
+	float metalic;
+	float3 emission;
+	float emissionStrength;
+};
+
+struct HitInfo
+{
+	float3 hitPoint;
+	float3 normal;
+	float distance;
+	PMaterial material;
+};
+
+// Ray Structure
+struct Ray
+{
+	float3 origin;
+	float3 direction;
+	float3 energy;
+};
+
+struct Sphere
+{
+	float3 center;
+	float radius;
+	PMaterial material;
+};
+
+struct Plane
+{
+	float3 position;
+	float3 normal;
+	PMaterial material;
+};
+
+StructuredBuffer<Sphere> spheres;
+
+Ray CreateRay(float3 origin, float3 direction){
+	Ray ray;
+	ray.origin = origin;
+	ray.direction = direction;
+	ray.energy = float3(1.0, 1.0, 1.0);
+	return ray;
+}
+
+Ray CreateCameraRay(float2 uv){
+	float3 origin = mul(CameraToWorldMat, float4(0.0, 0.0, 0.0, 1.0)).xyz;
+	float3 direction = mul(InversePerspectiveProjMat, float4(uv, 0.0, 1.0)).xyz;
+	direction = mul(CameraToWorldMat, float4(direction,0.0)).xyz;
+	direction = normalize(direction);
+	return CreateRay(origin, direction);
+}
+
+HitInfo CreateRayHit(){
+    HitInfo hit;
+    hit.hitPoint = float3(0.0, 0.0, 0.0);
+    hit.distance = 1.#INF;
+    hit.normal = float3(0.0, 0.0, 0.0);
+    hit.material.albedo = float3(0.0, 0.0, 0.0);
+    hit.material.emission = float3(0.0, 0.0, 0.0);
+	hit.material.emissionStrength = 0;
+	hit.material.metalic = 0.0;
+	hit.material.smoothness = 0.0;
+    return hit;
+}
+
+Sphere CreateSphere(float3 position, float radius){
+	Sphere sphere;
+	sphere.center = position;
+	sphere.radius = radius;
+	sphere.material.albedo = 1;
+	sphere.material.emission = 0;
+	sphere.material.emissionStrength = 0;
+	return sphere;
+}
+
+Plane CreatePlane(float3 position, float3 normal){
+	Plane plane;
+	plane.position = position;
+	plane.normal = normal;
+	plane.material.albedo = 1;
+	plane.material.emission = 1;
+	plane.material.emissionStrength = 1;
+	plane.material.smoothness = 0.8;
+	plane.material.metalic = 0;
+	return plane;
+}
+
+// Renders a basic Skybox
+float3 SkyboxIntersect(Ray ray){
+	// looking at the sun
+	if(dot(ray.direction,-Sun.xyz) > 0.999) // => 0.999 determines the size of the sun: x => 0 sun fills sky | x => 1 sun shrinks to point
+		return 1; // sun is pure white
+
+	// looking above horizon
+	float y = ray.direction.y; // V sky is gradient from dark to light | V ground is mid gray
+	return y > 0 ? float3(0.4*(1-y)*(1-y), 0.8*(1-y)*(1-y), 1.0) : 0.4;
+}
+
+//Determines whether a plane was hit using an arbitrary point on the plane
+//((P + td) - Q) * N = 0
+void PlaneIntersect(Ray ray, Plane plane, inout HitInfo hit){
+	float3 v = plane.position - ray.origin; // stored surface point commutation X = ((P + td) - Q) => ((P - Q) + td) => v + td
+	float d = dot(ray.direction, plane.normal); // N * d 
+	if(d != 0){ // prevent division by 0
+		float t = dot(v, plane.normal) / d;
+		if(t > 0 && t < hit.distance){ 
+			// update all the hit information with the planes data
+			hit.hitPoint = ray.origin + t * ray.direction;
+			hit.normal = plane.normal;
+			hit.distance = t;
+			hit.material = plane.material;
+		}
+	}
+}
+
+// Determines whether a sphere was hit by defining a point on the sphere
+// X which is a distance r away from the center is also equal to the ray point (ray.origin + ray.direction * t)
+// ((P + td) - Q) * ((P + td) - Q)) = r^2
+void SphereIntersect(Ray ray, Sphere sphere, inout HitInfo hit){
+	float3 v = ray.origin - sphere.center; // stored surface point commutation X = ((P + td) - Q) => ((P - Q) + td) => v + td
+	float a = dot(ray.direction, ray.direction); // quadratic term
+	if(a == 0) // prevent division by 0
+		return;
+	float b = 2.0 * dot(ray.direction,v); // linear term
+	float c = dot(v,v) - sphere.radius * sphere.radius; // constant term
+	float t1 = (-b - sqrt(b*b-4*a*c)) / 2*a; // solve for parameter t using the quadratic formula
+	if(t1 > 0 && t1 < hit.distance){ // compare the sphere intersection to the rays current closest hit => closer ? update : keep
+		// update all the hit information with the spheres data
+		hit.hitPoint = ray.origin + t1 * ray.direction;
+		hit.normal = normalize(hit.hitPoint - sphere.center);
+		hit.distance = t1;
+		hit.material.smoothness = sphere.material.smoothness;
+		hit.material = sphere.material;
+	}
+}
+
+Ray Bounce(Ray ray, HitInfo hit, inout uint seed){
+	if(hit.distance < 1.#INF){
+		ray.origin = hit.hitPoint + hit.normal * 0.001;
+		float3 diffuseRay = normalize(hit.normal + randomDirection(seed, hit.normal));
+		float3 specularRay = reflect(ray.direction, hit.normal);
+
+		ray.direction = lerp(diffuseRay, specularRay, 0);
+	}
+	return ray;
+}
+
+HitInfo RayCollision(Ray ray){
+	HitInfo hit = CreateRayHit();
+	PlaneIntersect(ray, CreatePlane(float3(0.0, -2.0, 0.0),float3(0.0, 1.0, 0.0)), hit); // Ground plane hit
+	// Scene Spheres
+	uint sphereCount, stride;
+	spheres.GetDimensions(sphereCount, stride);
+	for(uint i = 0; i < sphereCount; i++){
+		SphereIntersect(ray,spheres[i],hit);
+	}
+	// TODO: Add other shapes, eventually meshes
+	return hit;
+}
+
+// Fires a given ray and returns color based on the combined hits
+// associated with the intersections in the scene
+float3 FireRay(Ray ray, inout uint seed){
+	float3 incomingLight = float3(0,0,0);
+	float3 color = float3(1,1,1);
+	for(uint i = 0; i < MAX_BOUNCES; i++){
+		
+		HitInfo hit = RayCollision(ray);
+		
+		if(hit.distance < 1.#INF){
+			float3 light = sunLight ? -1*Sun.xyz : normalize(float3(0,10,0) - hit.hitPoint);
+			//Ray shadowRay = CreateRay(hit.hitPoint + hit.normal * 0.001, -1*Sun.xyz);
+			Ray shadowRay = CreateRay(hit.hitPoint + hit.normal * 0.001, light);
+			HitInfo shadowHit = RayCollision(shadowRay);
+			if(shadowHit.distance != 1.#INF){
+				//color = 0.5*(hit.normal+1);
+				color = 0.05 * hit.material.albedo;
+			}else{
+			//return lerp(0, hit.material.albedo, saturate(-dot(hit.normal, Sun.xyz)) + 0.05);
+				float3 diffuse = max(0.05,saturate(dot(light, hit.normal))) * Sun.w * hit.material.albedo;
+				float s = pow(8192, min(max(0.1,hit.material.smoothness),0.9));
+				float specular = pow(max(0, dot(light, hit.normal)), s);
+				//float reflectance = lerp(diffuse, 1, hit.material.smoothness);
+				
+				color = lerp(diffuse, 1, specular); // 
+
+				/*color = (hit.material.albedo / PI) + ((8 + s)/(8 * PI)) * (1 - hit.material.albedo) * specular;
+				color = max(0.05,saturate(-dot(Sun.xyz, hit.normal))) * Sun.w * color;*/
+			/*ray = Bounce(ray,hit,seed);
+
+			PMaterial mat = hit.material;
+			incomingLight += (color * mat.emission) * mat.emissionStrength;
+			color *= mat.albedo;*/
+			/*if(!any(color))
+				break;*/
+			}
+		}
+		else{
+			color = SkyboxIntersect(ray);
+			//incomingLight += color * SkyboxIntersect(ray);
+			break;
+		}
+		//color -= hit.material.smoothness;
+	}
+	return color;
+}
+
+
+
+float3 Shade(inout Ray ray, HitInfo hit, inout uint seed){
+	if(hit.distance < 1.#INF){
+		ray.origin = hit.hitPoint + hit.normal * 0.001;
+		float3 diffuseRay = normalize(hit.normal + randomDirection(seed, hit.normal));
+		float3 specularRay = reflect(ray.direction, hit.normal);
+
+		ray.direction = lerp(diffuseRay, specularRay, hit.material.smoothness);
+
+
+		/*
+		ray.energy *= hit.specular;
+		Ray shadowRay = CreateRay(hit.hitPoint + hit.normal * 0.001, -1*Sun.xyz);
+		HitInfo shadowHit = FireRay(shadowRay);
+		if(shadowHit.distance != 1.#INF){
+			return 0.05 * hit.albedo;
+		}
+		
+		//float3 color = hit.albedo * hit.specular;
+		return saturate((-dot(Sun.xyz, hit.normal)) + 0.05) * Sun.w * hit.albedo;*/
+	}else{
+		ray.energy = 0.0;
+		return SkyboxIntersect(ray);
+	}
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	uint width, height;
+	Result.GetDimensions(width,height);
+	uint index = (id.x + id.y * width);
+	uint rngState = index;
+	float2 uv = float2((id.xy) / float2(width,height) * 2.0 - 1.0);
+
+	Ray ray = CreateCameraRay(uv);
+
+	float3 total = 0;
+	int samples = 1;
+	for(int i = 0; i < samples; i++)
+		total += FireRay(ray,rngState);
+
+	float3 color = total / samples;
+    //Result[id.xy] = float4(id.x & id.y, (id.x & 15)/15.0, (id.y & 15)/15.0, 0.0);
+    Result[id.xy] = float4(color, 1);
+    //Result[id.xy] = float4(0.4,0.58,0.93,1.0);
+	/*float4 j = floatOne() * random(index);
+	Result[id.xy] = float4(j.xyz,1);*/
+}
