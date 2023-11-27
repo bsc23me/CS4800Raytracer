@@ -29,6 +29,7 @@ public class CameraRaytracer : MonoBehaviour
 	ComputeBuffer vertexBuffer;
 	ComputeBuffer normalBuffer;
 	ComputeBuffer UVBuffer;
+	ComputeBuffer IndicesBuffer;
 	ComputeBuffer meshBuffer;
 
 	List<PMesh> meshes;
@@ -36,6 +37,7 @@ public class CameraRaytracer : MonoBehaviour
 	List<Vector3> staticNormals;
 	List<Vector2> staticUVs;
 	List<Triangle> staticTriangles;
+	List<PMesh> staticIndices;
 
 	[SerializeField] Texture2D texture;
 	[SerializeField] Texture2D normalMap;
@@ -62,19 +64,21 @@ public class CameraRaytracer : MonoBehaviour
 		sphereBuffer.SetData(spheres);
 
 		// Red Square for posterity
-		PMesh pMesh = new PMesh();
+		/*PMesh pMesh = new PMesh();
 		pMesh.verts = new Vector3[] { Vector3.zero, Vector3.right, new Vector3(1, 1, 0), Vector3.up };
 		int[] f1 = new int[] { 0, 1, 2 };
 		int[] f2 = new int[] { 2, 3, 0 };
-		pMesh.faces = new int[][] { f1, f2 };
+		pMesh.faces = new int[][] { f1, f2 };*/
 
 		staticVertices = new List<Vector3>();
 		staticNormals = new List<Vector3>();
 		staticUVs = new List<Vector2>();
 		staticTriangles = new List<Triangle>();
+		staticIndices = new List<PMesh>();
 
 		LoadScene(scene);
 
+		Debug.Log($"Loaded scene with {staticIndices.Count} meshes, having ({staticIndices[0].faces}, {staticTriangles.Count}) total faces");
 		/*staticVertices.AddRange(pMesh.verts);
 		staticNormals.Add(Vector3.back);
 
@@ -95,24 +99,24 @@ public class CameraRaytracer : MonoBehaviour
 		//LoadScene(scene);
 
 
-		int dyn = 0;
 		/*foreach (PMesh mesh in meshes)
 			if(mesh.rotationSpeed == 0)
 				staticTriangles.AddRange(Triangulate(mesh));
 			else
 				dyn += mesh.faces.GetLength(0);*/
-		
-		vertexBuffer = new ComputeBuffer(staticVertices.Count + dyn, 3 * sizeof(float));
-		normalBuffer = new ComputeBuffer(staticNormals.Count + dyn, 3 * sizeof(float));
-		UVBuffer = new ComputeBuffer(staticUVs.Count + dyn, 2 * sizeof(float));
-		meshBuffer = new ComputeBuffer(staticTriangles.Count + dyn, TriangleSize * sizeof(float));
+
+		vertexBuffer = new ComputeBuffer(staticVertices.Count, 3 * sizeof(float));
+		normalBuffer = new ComputeBuffer(staticNormals.Count, 3 * sizeof(float));
+		UVBuffer = new ComputeBuffer(staticUVs.Count, 2 * sizeof(float));
+		IndicesBuffer = new ComputeBuffer(staticIndices.Count,4 * sizeof(int));
+		meshBuffer = new ComputeBuffer(staticTriangles.Count, TriangleSize * sizeof(float));
 
 		vertexBuffer.SetData(staticVertices);
 		normalBuffer.SetData(staticNormals);
 		UVBuffer.SetData(staticUVs);
+		IndicesBuffer.SetData(staticIndices);
 		meshBuffer.SetData(staticTriangles);
 
-		Debug.Log("");
 	}
 
 	private void OnDisable()
@@ -127,6 +131,8 @@ public class CameraRaytracer : MonoBehaviour
 			meshBuffer.Release();
 		if (UVBuffer != null)
 			UVBuffer.Release();
+		if (IndicesBuffer != null)
+			IndicesBuffer.Release();
 	}
 
 	// Start is called before the first frame update
@@ -175,6 +181,7 @@ public class CameraRaytracer : MonoBehaviour
 		rayTracingShader.SetBuffer(0, "Vertices", vertexBuffer);
 		rayTracingShader.SetBuffer(0, "VNormals", normalBuffer);
 		rayTracingShader.SetBuffer(0, "UVs", UVBuffer);
+		rayTracingShader.SetBuffer(0, "MeshIndex", IndicesBuffer);
 		rayTracingShader.SetTexture(0, "Tex", texture);
 		rayTracingShader.SetTexture(0, "Norm", normalMap);
 		rayTracingShader.SetBuffer(0,"Meshes", meshBuffer);
@@ -251,54 +258,43 @@ public class CameraRaytracer : MonoBehaviour
 		return tri;
 	}*/
 
-
-	/*
-	Triangle transformVert(Vector3 vertex, Vector3 position, float3 rotation, float scale)
+	Vector3 rotateVector(Vector3 vec, Vector3 rotation)
 	{
-		
 		float x, y, z;
 		Vector3[] rotX = new Vector3[] {
-			new Vector3(0, Mathf.Cos(rotation), -Mathf.Sin(rotation.x)),
-			new Vector3(0, Mathf.Sin(rotation), Mathf.Cos(rotation.x)) };
+			new Vector3(0, Mathf.Cos(rotation.x), -Mathf.Sin(rotation.x)),
+			new Vector3(0, Mathf.Sin(rotation.x), Mathf.Cos(rotation.x)) };
 
 		Vector3[] rotY = new Vector3[] {
-			new Vector3(Mathf.Sin(rotation), 0, Mathf.Cos(rotation.y)) ,
-			new Vector3(Mathf.Cos(rotation), 0, -Mathf.Sin(rotation.y))};
+			new Vector3(Mathf.Cos(rotation.y), 0, Mathf.Sin(rotation.y)) ,
+			new Vector3(-Mathf.Sin(rotation.y), 0, Mathf.Cos(rotation.y))};
 
 		Vector3[] rotZ = new Vector3[] {
-			new Vector3(Mathf.Cos(rotation), -Mathf.Sin(rotation.z), 0),
-			new Vector3(Mathf.Sin(rotation), Mathf.Cos(rotation.z), 0) };
-		
-		x = Vector3.Dot(vertex, rotY[0]);
-		y = vertex.y;
-		z = Vector3.Dot(vertex, rotY[1]);
-		ret = new Vector3(x, y, z);
+			new Vector3(Mathf.Cos(rotation.z), -Mathf.Sin(rotation.z), 0),
+			new Vector3(Mathf.Sin(rotation.z), Mathf.Cos(rotation.z), 0) };
 
-		x = Vector3.Dot(staticVertices[tri.points.y], rot[0]);
-		y = Vector3.Dot(staticVertices[tri.points.y], rot[1]);
-		z = staticVertices[tri.points.y].z;
-		t.b = new Vector3(x, y, z);
+		x = Vector3.Dot(vec, rotZ[0]);
+		y = Vector3.Dot(vec, rotZ[1]);
+		z = vec.z;
+		Vector3 v = new Vector3(x, y, z);
 
-		x = Vector3.Dot(staticVertices[tri.points.z], rot[0]);
-		y = Vector3.Dot(staticVertices[tri.points.z], rot[1]);
-		z = tri.c.z;
-		t.c = new Vector3(x, y, z);
+		x = Vector3.Dot(v, rotY[0]);
+		z = Vector3.Dot(v, rotY[1]);
+		v = new Vector3(x, y, z);
 
-		x = Vector3.Dot(tri.normal, rot[0]);
-		y = Vector3.Dot(tri.normal, rot[1]);
-		z = tri.normal.z;
-		t.normal = new Vector3(x, y, z);
-
-		t.a *= scale;
-		t.b *= scale;
-		t.c *= scale;
-
-		t.a += position;
-		t.b += position;
-		t.c += position;
-		return t;
+		y = Vector3.Dot(v, rotX[0]);
+		z = Vector3.Dot(v, rotX[1]);
+		return new Vector3(x, y, z);
 	}
-	*/
+	
+	Vector3 transformVert(Vector3 vertex, Vector3 position, Vector3 rotation, float scale)
+	{
+		Vector3 v = rotateVector(vertex, rotation);
+		v *= scale;
+		v += position;
+		return v;
+	}
+	
 	#endregion
 
 	#region Mesh IO
@@ -309,8 +305,12 @@ public class CameraRaytracer : MonoBehaviour
 		string path = "Assets/Models/";
 		string[] models = new string[] { path + "CubeT.obj", path + "SphereI.obj", path + "Mug.obj" , path + "WoodPlank.obj"};
 
-		LoadMesh(models[scene], randMat(), Vector3.zero, 0);
+		Vector3 test = UnityEngine.Random.onUnitSphere;
 
+		for (int i = 0; i < 2; i++)
+		{
+			LoadMesh(models[3], randMat(), Vector3.zero, test);
+		}
 		if (scene == 0)
 		{
 
@@ -336,43 +336,41 @@ public class CameraRaytracer : MonoBehaviour
 		return meshes;
 	}
 
-	PMesh LoadMesh(string path, PMaterial material, Vector3 position, float rotation)
+	void LoadMesh(string path, PMaterial material, Vector3 position, Vector3 rotation)
 	{
 		StreamReader streamReader = new StreamReader(path);
-		PMesh mesh = new PMesh();
-		mesh.material = material;
-		mesh.position = position;
-		mesh.rotationSpeed = rotation;
-
-		List<Vector3> vertices = new List<Vector3>();
-		List<Vector3> vertexNormals = new List<Vector3>();
-		List<int[]> faces = new List<int[]>();
-
+		int verts = 0, normals = 0, uvs = 0, faces = 0;
 		string data = streamReader.ReadToEnd();
 		string[] lines = data.Split("\n");
 		for(int i = 0; i < lines.Length; i++)
 		{
 			if (lines[i].StartsWith("v "))
 			{
-				staticVertices.Add(LoadVector(lines[i]));
+				verts++;
+				Vector3 vert = transformVert(LoadVector(lines[i]), position, rotation, 1);
+				//Vector3 vert = LoadVector(lines[i]);
+				staticVertices.Add(vert);
 			}
 			else if (lines[i].StartsWith("vt"))
 			{
+				uvs++;
 				staticUVs.Add(LoadVector2(lines[i]));
 			}
 			else if (lines[i].StartsWith("vn"))
 			{
-				staticNormals.Add(LoadVector(lines[i]));
+				normals++;
+				staticNormals.Add(rotateVector(LoadVector(lines[i]), rotation));
 			}
 			else if (lines[i].StartsWith("f "))
 			{
+				faces++;
 				staticTriangles.Add(LoadFace(lines[i]));
 			}
 		}
-		mesh.verts = vertices.ToArray();
-		mesh.normals = vertexNormals.ToArray();
-		mesh.faces = faces.ToArray();
-		return mesh;
+		if(staticIndices.Count > 0)
+			staticIndices.Add(addMesh(createMesh(verts, normals, uvs, faces), staticIndices[staticIndices.Count-1]));
+		else
+			staticIndices.Add(createMesh(verts,normals,uvs, faces));
 	}
 
 	Vector3 LoadVector(string value)
@@ -448,7 +446,25 @@ public class CameraRaytracer : MonoBehaviour
 		Debug.Log($"Point A: {verts[tri.points.x]},\nPoint B: {verts[tri.points.y]},\nPoint C: {verts[tri.points.z]}");
 	}
 
-	
+	PMesh createMesh(int v, int vn, int vt, int f)
+	{
+		PMesh mesh = new PMesh();
+		mesh.verts = v;
+		mesh.normals = vn;
+		mesh.uvs = vt;
+		mesh.faces = f;
+		return mesh;
+	}
+
+	PMesh addMesh(PMesh m1, PMesh m2)
+	{
+		PMesh mesh = new PMesh();
+		mesh.verts = m1.verts + m2.verts;
+		mesh.normals = m1.normals + m2.normals;
+		mesh.uvs = m1.uvs + m2.uvs;
+		mesh.faces = m1.faces + m2.faces;
+		return mesh;
+	}
 
 	#endregion
 }
@@ -480,12 +496,19 @@ struct Triangle
 
 struct PMesh
 {
-	public Vector3 position;
+	/*public Vector3 position;
 	public float rotationSpeed;
 	public Vector3[] verts;
 	public Vector3[] normals;
 	public int[][] faces;
-	public PMaterial material;
+	public PMaterial material;*/
+
+	public int verts;
+	public int normals;
+	public int uvs;
+	public int faces;
+
+	
 }
 
 #endregion
