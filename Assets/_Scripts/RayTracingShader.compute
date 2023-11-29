@@ -37,6 +37,13 @@ float random(inout uint seed){
 	return result / 4294967295.0;
 }
 
+float randomf(uint seed){
+	seed = seed * 747796405 + 2891336453;
+	uint result = ((seed >> ((seed >> 28) + 4)) ^ seed) * 277803737;
+	result = (result >> 22) ^ result;
+	return result / 4294967295.0;
+}
+
 float randomNormal(inout uint seed){
 	float theta = 2 * 3.14159 * random(seed);
 	float rho = sqrt(-2 * log(random(seed)));
@@ -207,11 +214,11 @@ float TriangleArea(Triangle tri){
 }
 
 // Converts a given Cartesian point to the provided triangle specific Barycenteric coordinates
-float3 CartToBary(Triangle tri, float3 cart)
+float3 CartToBary(Triangle tri, int4 indices, float3 cart)
 {
-	float3 x = Vertices[tri.points.x];
-	float3 y = Vertices[tri.points.y];
-	float3 z = Vertices[tri.points.z];
+	float3 x = Vertices[tri.points.x + indices.x];
+	float3 y = Vertices[tri.points.y + indices.x];
+	float3 z = Vertices[tri.points.z + indices.x];
 	float abc = TriangleArea(x,y,z);
 	float alpha = TriangleArea(y, z, cart) / abc;
 	float beta = TriangleArea(x, z, cart) / abc;
@@ -229,7 +236,7 @@ float2 BaryToUV(Triangle tri, int index, float3 bary){
 // Returns true if a given Cartesian point is inside a triangle
 bool PointInTri(Triangle tri, float3 p)
 {
-	float3 baryPoint = CartToBary(tri, p);
+	float3 baryPoint = CartToBary(tri, 0, p);
 
 	// account for floating point error
 	float x = baryPoint.x + baryPoint.y + baryPoint.z - 1;
@@ -265,6 +272,20 @@ float3 SkyboxIntersect(Ray ray){
 	return lerp(sky, 1, sun);
 }
 
+float3 NightSkyboxIntersect(Ray ray){
+	// looking at the moon
+	if(dot(ray.direction,-Sun.xyz) > 0.999) // => 0.999 determines the size of the moon: x => 0 sun fills sky | x => 1 moon shrinks to point
+		return 1; // moon is pure white
+
+	float light = pow(randomf(floor(abs(2000000000.0*ray.direction.x))), 1000);
+	// looking above horizon
+	float y = ray.direction.y; // V sky is gradient from dark to light | V ground is mid gray
+	float3 sky = y > 0 ? light : float3(0.0, 0, 0.15);
+
+	//float sun = pow(max(0, dot(ray.direction,-Sun.xyz)), 32);
+	return sky;
+}
+
 //Determines whether a plane was hit using an arbitrary point on the plane
 //((P + td) - Q) * N = 0
 void PlaneIntersect(Ray ray, Plane plane, inout HitInfo hit){
@@ -295,7 +316,7 @@ void TriangleIntersect(Ray ray, Triangle tri, int4 indices, inout HitInfo hit){
 		float t = dot(v, normal) / d;
 		float3 p = ray.origin + t * ray.direction;
 		if(t > 0 && t < hit.distance){
-			float3 bary = CartToBary(tri, p);
+			float3 bary = CartToBary(tri, indices, p);
 			if(abs(bary.x + bary.y + bary.z - 1) < 0.001){
 				float2 uv = BaryToUV(tri,indices.z,bary);
 				int2 texSpace = int2(uv.x * w, uv.y * h);
@@ -363,9 +384,9 @@ HitInfo RayCollision(Ray ray){
 	MeshIndex.GetDimensions(meshCount, meshStride);
 	Meshes.GetDimensions(triCount, triStride);
 	int currMesh = 0;
-	for(uint i = 0; i < meshCount; i++){
+	for(uint i = 1; i <= meshCount; i++){
 		for(uint j = 0; j < MeshIndex[i].w; j++){
-			TriangleIntersect(ray,Meshes[i+j],MeshIndex[i],hit);
+			TriangleIntersect(ray,Meshes[MeshIndex[i-1].w+j],MeshIndex[i-1],hit);
 		}
 	}
 
@@ -476,7 +497,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 
 	Ray camRay = CreateCameraRay(uv);
 	float3 randRay = randomDirection(rngState, camRay.direction);
-	float3 dir = lerp(camRay.direction, randRay, 0.0003);
+	float3 dir = lerp(camRay.direction, randRay, SAMPLES == 1 ? 0 : 0.0003);
 	Ray ray = CreateRay(camRay.origin, dir);
 	//float3 color = float4(0.4,0.58,0.93,1.0);
 	float3 color = 0;
@@ -486,6 +507,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 	color /= SAMPLES;
 
     Result[id.xy] = float4(color, 1);
+	//Result[id.xy] /= 2;
     //Result[id.xy] = float4(id.x & id.y, (id.x & 15)/15.0, (id.y & 15)/15.0, 0.0);
     //Result[id.xy] = float4(0.4,0.58,0.93,1.0);
 	//Result[id.xy] = float4(random(index),1);
