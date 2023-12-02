@@ -83,8 +83,7 @@ public class CameraRaytracer : MonoBehaviour
 		staticIndices.Add(createMesh(0, 0, 0, 0));
 
 		LoadScene();
-
-		Debug.Log($"Loaded scene with {staticIndices.Count - 1} meshes, having ({staticIndices[1].faces}, {staticIndices[2].faces}, {staticTriangles.Count}) total faces");
+		Debug.Log($"Loaded scene with {staticIndices.Count - 1} meshes, having ({staticIndices[1].faces}, {staticTriangles.Count}) total faces");
 		/*staticVertices.AddRange(pMesh.verts);
 		staticNormals.Add(Vector3.back);
 
@@ -163,15 +162,19 @@ public class CameraRaytracer : MonoBehaviour
 
 	}
 	
-	/*private void FixedUpdate()
+	private void FixedUpdate()
 	{
-		List<Triangle> triangles = new List<Triangle>();
+		/*List<Triangle> triangles = new List<Triangle>();
 		foreach (PMesh mesh in meshes)
 			if(mesh.rotationSpeed != 0)
 				triangles.AddRange(Triangulate(mesh));
 		triangles.AddRange(staticTriangles);
-		meshBuffer.SetData(triangles);
-	}*/
+		meshBuffer.SetData(triangles);*/
+		
+		transformMesh(0, Time.fixedDeltaTime * Mathf.Sin(Time.time) * Vector3.forward, Vector3.up);
+		vertexBuffer.SetData(staticVertices);
+		normalBuffer.SetData(staticNormals);
+	}
 
 	void Render(RenderTexture destination)
 	{
@@ -321,9 +324,12 @@ public class CameraRaytracer : MonoBehaviour
 		return rotVectors.ToArray();
 	}
 	
-	Vector3 transformVert(Vector3 vertex, Vector3 position, Vector3 rotation, Vector3 scale)
+	Vector3 transformVert(Vector3 vertex, Vector3 position, Vector3 rotation, Vector3 rotateAbout, Vector3 scale)
 	{
-		Vector3 v = rotateVector(vertex, rotation);
+		Vector3 v = vertex;
+		v -= rotateAbout;
+		v = rotateVector(v, rotation);
+		v += rotateAbout;
 		v.x *= scale.x;
 		v.y *= scale.y;
 		v.z *= scale.z;
@@ -331,12 +337,25 @@ public class CameraRaytracer : MonoBehaviour
 		return v;
 	}
 
-	Vector3[] transformVerts(Vector3[] vertices, Vector3 position, Vector3 rotation, Vector3 scale)
+	Vector3[] transformVerts(Vector3[] vertices, Vector3 position, Vector3 rotation, Vector3 rotateAbout, Vector3 scale)
 	{
 		List<Vector3> verts = new List<Vector3>();
 		foreach (Vector3 vert in vertices)
-			verts.Add(transformVert(vert, position, rotation, scale));
+			verts.Add(transformVert(vert, position, rotation, rotateAbout, scale));
 		return verts.ToArray();
+	}
+
+	void transformMesh(int obj, Vector3 rotation, Vector3 rotateAbout)
+	{
+		Transform t = SceneObj.transform.GetChild(obj);
+		List<Vector3> mesh = staticVertices.GetRange(staticIndices[obj].verts, staticIndices[obj + 1].verts - staticIndices[obj].verts);
+		List<Vector3> normals = staticNormals.GetRange(staticIndices[obj].normals, staticIndices[obj + 1].normals - staticIndices[obj].normals);
+		Vector3[] transformedMesh = transformVerts(mesh.ToArray(), Vector3.zero, rotation, t.position + rotateAbout, Vector3.one);
+		Vector3[] transformedNormals = rotateVectors(normals.ToArray(), rotation);
+		for (int i = 0; i < mesh.Count; i++)
+			staticVertices[staticIndices[obj].verts + i] = transformedMesh[i];
+		for (int i = 0; i < normals.Count; i++)
+			staticNormals[staticIndices[obj].normals + i] = transformedNormals[i];
 	}
 
 	#endregion
@@ -365,9 +384,9 @@ public class CameraRaytracer : MonoBehaviour
 		return meshes;
 	}
 
-	void LoadMesh(Mesh mesh, Vector3 position, Vector3 rotation, Vector3 scale)
+	void LoadMesh(Mesh mesh, Vector3 position, Vector3 rotation, Vector3 rotateAbout, Vector3 scale)
 	{
-		staticVertices.AddRange(transformVerts(mesh.vertices, position, rotation, scale));
+		staticVertices.AddRange(transformVerts(mesh.vertices, position, rotation, rotateAbout, scale));
 		staticNormals.AddRange(rotateVectors(mesh.normals, rotation));
 		staticUVs.AddRange(mesh.uv);
 		staticTriangles.AddRange(LoadFaces(mesh.triangles));
@@ -379,11 +398,14 @@ public class CameraRaytracer : MonoBehaviour
 		else
 			staticIndices.Add(pMesh);
 	}
-
+	void LoadMesh(Mesh mesh, Vector3 position, Vector3 rotation, Vector3 scale)
+	{
+		LoadMesh(mesh, position, rotation, Vector3.zero, scale);
+	}
 
 	void LoadMesh(Mesh mesh)
 	{
-		LoadMesh(mesh, Vector3.zero, Vector3.zero, Vector3.one);
+		LoadMesh(mesh, Vector3.zero, Vector3.zero, Vector3.zero, Vector3.one);
 	}
 
 	void LoadMesh(string path, PMaterial material, Vector3 position, Vector3 rotation)
@@ -397,7 +419,7 @@ public class CameraRaytracer : MonoBehaviour
 			if (lines[i].StartsWith("v "))
 			{
 				verts++;
-				Vector3 vert = transformVert(LoadVector(lines[i]), position, rotation, Vector3.one);
+				Vector3 vert = transformVert(LoadVector(lines[i]), position, rotation, Vector3.zero, Vector3.one);
 				//Vector3 vert = LoadVector(lines[i]);
 				staticVertices.Add(vert);
 			}
