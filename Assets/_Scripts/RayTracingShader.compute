@@ -120,6 +120,7 @@ StructuredBuffer<int4> MeshIndex;
 
 Texture2D<float4> Tex;
 Texture2D<float4> Norm;
+Texture2D<float4> Metal;
 
 Texture3D<float4> AlbedoMap;
 Texture3D<float4> NormalMap;
@@ -315,19 +316,19 @@ void TriangleIntersect(Ray ray, Triangle tri, int4 indices, inout HitInfo hit){
 	float3 v = Vertices[indices.x + tri.points.x] - ray.origin;
 	float d = dot(ray.direction, normal);
 	float occ = dot(ray.direction, normalize(v));
-	if(d != 0 /*&& occ > 0*/){
+	if(d < 0 /*&& occ > 0*/){
 		float t = dot(v, normal) / d;
 		float3 p = ray.origin + t * ray.direction;
 		if(t > 0 && t < hit.distance){
 			float3 bary = CartToBary(tri, indices, p);
-			if(abs(bary.x + bary.y + bary.z - 1) < 0.001){
+			if(abs(bary.x + bary.y + bary.z - 1) < 0.008){
 				float2 uv = BaryToUV(tri,indices.z,bary);
 				int2 texSpace = int2(uv.x * w, uv.y * h);
 				hit.hitPoint = p;
 				hit.normal = normal + Norm[texSpace];
 				hit.distance = t;
 				hit.albedo = Tex[texSpace];
-				hit.smoothness = 0;
+				hit.smoothness = Metal[texSpace];
 				//updateHitMaterial(hit, tri.material, 0);
 			}
 		}

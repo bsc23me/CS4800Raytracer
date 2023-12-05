@@ -43,6 +43,8 @@ public class CameraRaytracer : MonoBehaviour
 	[SerializeField] Texture2D texture;
 	[SerializeField] Texture2D normalMap;
 
+	private int textureDepth = 2;
+
 	[SerializeField] Material material;
 
 	[SerializeField] GameObject SceneObj;
@@ -79,8 +81,7 @@ public class CameraRaytracer : MonoBehaviour
 		staticNormals = new List<Vector3>();
 		staticUVs = new List<Vector2>();
 		staticTriangles = new List<Triangle>();
-		staticIndices = new List<PMesh>();
-		staticIndices.Add(createMesh(0, 0, 0, 0));
+		staticIndices = new List<PMesh>() { createMesh(0, 0, 0, 0) };
 
 		LoadScene();
 		Debug.Log($"Loaded scene with {staticIndices.Count - 1} meshes, having ({staticIndices[1].faces}, {staticTriangles.Count}) total faces");
@@ -101,8 +102,6 @@ public class CameraRaytracer : MonoBehaviour
 		staticTriangles.Add(tri1);
 		staticTriangles.Add(tri2);
 		*/
-		//LoadScene(scene);
-
 
 		/*foreach (PMesh mesh in meshes)
 			if(mesh.rotationSpeed == 0)
@@ -171,7 +170,7 @@ public class CameraRaytracer : MonoBehaviour
 		triangles.AddRange(staticTriangles);
 		meshBuffer.SetData(triangles);*/
 		
-		transformMesh(0, Time.fixedDeltaTime * Mathf.Sin(Time.time) * Vector3.forward, Vector3.up);
+		//transformMesh(0, Time.fixedDeltaTime * Mathf.Sin(Time.time) * Vector3.forward, Vector3.up);
 		vertexBuffer.SetData(staticVertices);
 		normalBuffer.SetData(staticNormals);
 	}
@@ -204,6 +203,7 @@ public class CameraRaytracer : MonoBehaviour
 		rayTracingShader.SetBuffer(0, "MeshIndex", IndicesBuffer);
 		rayTracingShader.SetTexture(0, "Tex", material.mainTexture);
 		rayTracingShader.SetTexture(0, "Norm", material.GetTexture("_BumpMap"));
+		rayTracingShader.SetTexture(0, "Metal", material.GetTexture("_MetallicGlossMap"));
 		rayTracingShader.SetBuffer(0,"Meshes", meshBuffer);
 
 		rayTracingShader.SetInt("SAMPLES", 1/*scene == 0 ? 1 : 32*/);
@@ -221,8 +221,7 @@ public class CameraRaytracer : MonoBehaviour
 			if(rt != null)
 				rt.Release();
 
-			rt = new RenderTexture(Screen.width, Screen.height, 0,
-				RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
+			rt = new RenderTexture(Screen.width, Screen.height, 0, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
 			rt.enableRandomWrite = true;
 			rt.Create();
 		}
@@ -370,9 +369,11 @@ public class CameraRaytracer : MonoBehaviour
 		for(int i = 0; i < SceneObj.transform.childCount; i++)
 		{
 			Transform child = SceneObj.transform.GetChild(i);
-			LoadMesh(child.GetComponent<MeshFilter>().sharedMesh, child.position, child.eulerAngles, child.localScale);
-			//LoadMesh(child.GetComponent<MeshFilter>().sharedMesh, child.position, child.eulerAngles, child.localScale);
-			Debug.Log($"Run {i} times, Obj w/{child.position} position");
+			if (child.gameObject.activeSelf)
+			{
+				LoadMesh(child.GetComponent<MeshFilter>().sharedMesh, child.position, child.eulerAngles, child.localScale);
+				Debug.Log($"Run {i} times, Obj w/{child.position} position");
+			}
 		}
 /*
 		Vector3 test = UnityEngine.Random.onUnitSphere;
@@ -494,6 +495,7 @@ public class CameraRaytracer : MonoBehaviour
 		tri.uv.z = verts[2];
 
 		tri.normal = verts[0];
+		// TODO: Add Phong shading
 		return tri;
 	}
 
