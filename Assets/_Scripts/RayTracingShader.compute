@@ -125,7 +125,7 @@ StructuredBuffer<Sphere> spheres;
 StructuredBuffer<float3> Vertices;
 StructuredBuffer<float3> VNormals;
 StructuredBuffer<float2> UVs;
-StructuredBuffer<Triangle> Meshes;
+StructuredBuffer<float3> Meshes;
 Texture3D<float4> Materials;
 StructuredBuffer<MeshIndices> MeshIndex;
 
@@ -432,11 +432,11 @@ HitInfo RayCollision(Ray ray){
 	uint meshCount, meshStride;
 	uint triCount, triStride;
 	MeshIndex.GetDimensions(meshCount, meshStride);
-	Meshes.GetDimensions(triCount, triStride);
+	//Meshes.GetDimensions(triCount, triStride);
 	int currMesh = 0;
 	for(uint i = 1; i <= meshCount; i++){
 		for(uint j = 0; j < MeshIndex[i].faceOffset; j++){
-			TriangleIntersect(ray,Meshes[MeshIndex[i-1].faceOffset+j].points,MeshIndex[i-1],hit);
+			TriangleIntersect(ray,Meshes[MeshIndex[i-1].faceOffset+j],MeshIndex[i-1],hit);
 		}
 	}
 

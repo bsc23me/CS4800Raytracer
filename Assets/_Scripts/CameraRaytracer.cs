@@ -43,7 +43,7 @@ public class CameraRaytracer : MonoBehaviour
 	List<Vector3> staticVertices;
 	List<Vector3> staticNormals;
 	List<Vector2> staticUVs;
-	List<Triangle> staticTriangles;
+	List<Vector3> staticTriangles;
 	List<Texture2D> textures; Texture3D staticTextures;
 	List<PMesh> staticIndices;
 
@@ -88,7 +88,7 @@ public class CameraRaytracer : MonoBehaviour
 		staticVertices = new List<Vector3>();
 		staticNormals = new List<Vector3>();
 		staticUVs = new List<Vector2>();
-		staticTriangles = new List<Triangle>();
+		staticTriangles = new List<Vector3>();
 		textures = new List<Texture2D>();
 		
 		staticIndices = new List<PMesh>() { createMesh(0, 0, 0, 0) };
@@ -140,7 +140,7 @@ public class CameraRaytracer : MonoBehaviour
 		vertexBuffer = new ComputeBuffer(staticVertices.Count, 3 * sizeof(float));
 		normalBuffer = new ComputeBuffer(staticNormals.Count, 3 * sizeof(float));
 		UVBuffer = new ComputeBuffer(staticUVs.Count, 2 * sizeof(float));
-		meshBuffer = new ComputeBuffer(staticTriangles.Count, TriangleSize * sizeof(float));
+		meshBuffer = new ComputeBuffer(staticTriangles.Count, 3 * sizeof(float));
 		IndicesBuffer = new ComputeBuffer(staticIndices.Count, 5 * sizeof(int));
 
 		vertexBuffer.SetData(staticVertices);
@@ -496,7 +496,7 @@ public class CameraRaytracer : MonoBehaviour
 			else if (lines[i].StartsWith("f "))
 			{
 				faces++;
-				staticTriangles.Add(LoadFace(lines[i]));
+				//staticTriangles.Add(LoadFace(lines[i]));
 			}
 		}
 		if(staticIndices.Count > 0)
@@ -524,6 +524,7 @@ public class CameraRaytracer : MonoBehaviour
 
 	Triangle LoadFace(string value)
 	{
+
 		Triangle tri = new Triangle();
 		string[] verts = value.Split(" ");
 		string[][] values = new string[verts.Length][];
@@ -542,25 +543,25 @@ public class CameraRaytracer : MonoBehaviour
 		return tri;
 	}
 
-	Triangle LoadFace(int[] verts)
+	Vector3 LoadFace(int[] verts)
 	{
-		Triangle tri = new Triangle();
-		tri.points.x = verts[0];
-		tri.points.y = verts[1];
-		tri.points.z = verts[2];
+		return new Vector3(verts[0], verts[1], verts[2]);
 
-		tri.uv.x = verts[0];
-		tri.uv.y = verts[1];
-		tri.uv.z = verts[2];
+		//tri.points.x = verts[0];
+		//tri.points.y = verts[1];
+		//tri.points.z = verts[2];
 
-		tri.normal = verts[0];
-		// TODO: Add Phong shading
-		return tri;
+		//tri.uv.x = verts[0];
+		//tri.uv.y = verts[1];
+		//tri.uv.z = verts[2];
+
+		//tri.normal = verts[0];
+		//return tri;
 	}
 
-	Triangle[] LoadFaces(int[] verts)
+	Vector3[] LoadFaces(int[] verts)
 	{
-		List<Triangle> tris = new List<Triangle>();
+		List<Vector3> tris = new List<Vector3>();
 		for(int i = 0; i < verts.Length; i+=3)
 			tris.Add(LoadFace(new int[] { verts[i], verts[i + 1], verts[i+2] }));
 
