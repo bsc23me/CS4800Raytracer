@@ -238,11 +238,10 @@ float3 CartToBary(Triangle tri, MeshIndices indices, float3 cart)
 	return float3(alpha,beta,gamma);
 }
 
-float2 BaryToUV(Triangle tri, int index, float3 bary){
-	float2 a = UVs[index + tri.uv.x];
-	float2 b = UVs[index + tri.uv.y];
-	float2 c = UVs[index + tri.uv.z];
-	return a*bary.x +b*bary.y+c*bary.z;
+float2 BaryToUV(float3 tri, int index, float3 bary){
+	float3 idx = index + tri;
+	float2x3 a = float2x3(UVs[idx.x], UVs[idx.y], UVs[idx.z]);
+	return mul(a,bary);
 }
 
 float TriangleSquareArea(float3 x, float3 y, float3 z){
@@ -253,10 +252,10 @@ float TriangleSquareArea(float3 x, float3 y, float3 z){
 	return areaA2 / 2;
 }
 
-float3 FastBary(Triangle tri, MeshIndices indices, float3 cart){
-	float3 x = Vertices[tri.points.x + indices.vertOffset];
-	float3 y = Vertices[tri.points.y + indices.vertOffset];
-	float3 z = Vertices[tri.points.z + indices.vertOffset];
+float3 FastBary(float3 tri, MeshIndices indices, float3 cart){
+	float3 x = Vertices[tri.x + indices.vertOffset];
+	float3 y = Vertices[tri.y + indices.vertOffset];
+	float3 z = Vertices[tri.z + indices.vertOffset];
 	float triArea2 = TriangleSquareArea(x,y,z);
 	float alpha = sqrt(TriangleSquareArea(y,z,cart) / triArea2);
 	float beta = sqrt(TriangleSquareArea(x,z,cart) / triArea2);
@@ -346,31 +345,37 @@ void PlaneIntersect(Ray ray, Plane plane, inout HitInfo hit){
 	}
 }
 
-void TriangleIntersect(Ray ray, Triangle tri, MeshIndices indices, inout HitInfo hit){
+bool TriangleIntersect(Ray ray, float3 tri, MeshIndices indices, inout HitInfo hit){
 	uint w, h;
 	Tex.GetDimensions(w,h);
-	//float3 normal = -cross(tri.ptC - tri.ptA, tri.ptB - tri.ptA);
-	float3 normal = VNormals[indices.normalOffset + tri.normal];
-	float3 v = Vertices[indices.vertOffset + tri.points.x] - ray.origin;
+	float3 vidx = indices.vertOffset + tri;
+	float3x3 verts = float3x3(Vertices[vidx.x], Vertices[vidx.y], Vertices[vidx.z]);
+	float3 normal = cross(verts[1]-verts[0], verts[2]-verts[0]);
+
+	float3 nidx = indices.normalOffset + tri;
+	float3x3 vnormals = float3x3(VNormals[nidx.x], VNormals[nidx.y], VNormals[nidx.z]);
+	float3 v = Vertices[indices.vertOffset + tri.x] - ray.origin;
 	float d = dot(ray.direction, normal);
 	float occ = dot(ray.direction, normalize(v));
 	if(d < 0 /*&& occ > 0*/){
 		float t = dot(v, normal) / d;
 		float3 p = ray.origin + t * ray.direction;
 		if(t > 0 && t < hit.distance){
-			float3 bary = fastMath ? FastBary(tri, indices, p) : CartToBary(tri, indices, p);
-			if(abs(bary.x + bary.y + bary.z - 1) < 0.008){
+			float3 bary = FastBary(tri, indices, p);
+			if(abs(bary.x + bary.y + bary.z - 1) < 0.005){
 				float2 uv = BaryToUV(tri,indices.uvOffset,bary);
 				int2 texSpace = int2(uv.x * w, uv.y * h);
 				hit.hitPoint = p;
-				hit.normal = normal/* + Norm[texSpace]*/;
+				hit.normal = mul(transpose(vnormals),bary);
 				hit.distance = t;
 				hit.albedo = Tex[texSpace].xyz;
 				hit.smoothness = Metal[texSpace].w;
 				//updateHitMaterial(hit, indices.material, texSpace);
+				return true;
 			}
 		}
 	}
+	return false;
 }
 
 // Determines whether a sphere was hit by defining a point on the sphere
@@ -431,7 +436,7 @@ HitInfo RayCollision(Ray ray){
 	int currMesh = 0;
 	for(uint i = 1; i <= meshCount; i++){
 		for(uint j = 0; j < MeshIndex[i].faceOffset; j++){
-			TriangleIntersect(ray,Meshes[MeshIndex[i-1].faceOffset+j],MeshIndex[i-1],hit);
+			TriangleIntersect(ray,Meshes[MeshIndex[i-1].faceOffset+j].points,MeshIndex[i-1],hit);
 		}
 	}
 

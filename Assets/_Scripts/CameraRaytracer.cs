@@ -439,10 +439,16 @@ public class CameraRaytracer : MonoBehaviour
 
 	void LoadMesh(Mesh mesh, Vector3 position, Vector3 rotation, Vector3 rotateAbout, Vector3 scale, int material = -1)
 	{
+		
 		staticVertices.AddRange(transformVerts(mesh.vertices, position, rotation, rotateAbout, scale));
 		staticNormals.AddRange(rotateVectors(mesh.normals, rotation));
 		staticUVs.AddRange(mesh.uv);
 		staticTriangles.AddRange(LoadFaces(mesh.triangles));
+
+		Vector3 v1 = mesh.vertices[0];
+		Vector3 v2 = mesh.vertices[13];
+		Vector3 v3 = mesh.vertices[12];
+		Debug.Log($"{v1}, {v2}, {v3}; {mesh.normals[0]}, {Vector3.Cross(v2-v1,v3-v1)}, {Vector3.Cross(v3 - v2, v1 - v2)}, {Vector3.Cross(v1 - v3, v2 - v3)}");
 
 		PMesh pMesh = createMesh(mesh.vertexCount, mesh.normals.Length, mesh.uv.Length, mesh.triangles.Length/3, material);
 
