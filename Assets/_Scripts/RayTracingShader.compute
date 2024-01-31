@@ -226,11 +226,11 @@ float TriangleArea(Triangle tri){
 }
 
 // Converts a given Cartesian point to the provided triangle specific Barycenteric coordinates
-float3 CartToBary(Triangle tri, MeshIndices indices, float3 cart)
+float3 CartToBary(float3 tri, MeshIndices indices, float3 cart)
 {
-	float3 x = Vertices[tri.points.x + indices.vertOffset];
-	float3 y = Vertices[tri.points.y + indices.vertOffset];
-	float3 z = Vertices[tri.points.z + indices.vertOffset];
+	float3 x = Vertices[tri.x + indices.vertOffset];
+	float3 y = Vertices[tri.y + indices.vertOffset];
+	float3 z = Vertices[tri.z + indices.vertOffset];
 	float abc = TriangleArea(x,y,z);
 	float alpha = TriangleArea(y, z, cart) / abc;
 	float beta = TriangleArea(x, z, cart) / abc;
@@ -289,10 +289,11 @@ void updateHitMaterial(inout HitInfo hit, int material, float2 uv){
 		hit.emission = 0;
 		hit.emissionStrength = 0;
 	}else{
-		hit.albedo = Materials[float3(uv,0)].xyz;
-		//hit.normal = Materials[float3(uv,1)].xyz;
-		hit.smoothness = Materials[float3(uv,2)].w;
-		hit.metalic = Materials[float3(uv,2)].x;
+		hit.albedo = Materials[float3(uv,3*material+0)].xyz;
+		//hit.albedo = 1;
+		//hit.normal += Materials[float3(uv,3*material+1)].xyz;
+		hit.smoothness = Materials[float3(uv,3*material+2)].w;
+		hit.metalic = Materials[float3(uv,3*material+2)].x;
 		hit.emission = 0;
 		hit.emissionStrength = 0;
 	}
@@ -346,8 +347,8 @@ void PlaneIntersect(Ray ray, Plane plane, inout HitInfo hit){
 }
 
 bool TriangleIntersect(Ray ray, float3 tri, MeshIndices indices, inout HitInfo hit){
-	uint w, h;
-	Tex.GetDimensions(w,h);
+	uint w, h, z;
+	Materials.GetDimensions(w,h,z);
 	float3 vidx = indices.vertOffset + tri;
 	float3x3 verts = float3x3(Vertices[vidx.x], Vertices[vidx.y], Vertices[vidx.z]);
 	float3 normal = cross(verts[1]-verts[0], verts[2]-verts[0]);
@@ -366,11 +367,11 @@ bool TriangleIntersect(Ray ray, float3 tri, MeshIndices indices, inout HitInfo h
 				float2 uv = BaryToUV(tri,indices.uvOffset,bary);
 				int2 texSpace = int2(uv.x * w, uv.y * h);
 				hit.hitPoint = p;
-				hit.normal = mul(transpose(vnormals),bary);
+				hit.normal = normalize(mul(transpose(vnormals),bary));
 				hit.distance = t;
-				hit.albedo = Tex[texSpace].xyz;
-				hit.smoothness = Metal[texSpace].w;
-				//updateHitMaterial(hit, indices.material, texSpace);
+				//hit.albedo = 1;
+				//hit.smoothness = Metal[texSpace].w;
+				updateHitMaterial(hit, indices.material, texSpace);
 				return true;
 			}
 		}
@@ -470,18 +471,23 @@ float3 FireRay(Ray ray, inout uint seed){
 		}else
 			diffuse = SkyboxIntersect(ray);
 
-		fresnels[i] = hit.distance < 1.#INF ? 1 - pow(max(0,dot(hit.normal, -ray.direction)), max(0.01,  hit.smoothness)) : 0;
+		float s = pow(8192, min(max(0,1-hit.smoothness),0.9));
+		float glossy = pow(max(0, 1-dot(-ray.direction, hit.normal)), s);
+		fresnels[i] = hit.distance < 1.#INF ? glossy : 0;
 
-		float f = 1;
-		for(int j = 0; j < i; j++)
-			f *= fresnels[j];
+		// float f = 1;
+		// for(int j = 0; j < i; j++)
+		// 	f *= fresnels[j];
+		
 
-		color += f * (1-fresnels[i]) * diffuse;
+		color += energy * (1-fresnels[i]) * diffuse;
+
+		energy *= fresnels[i];
 
 		if(!Bounce(ray, hit, seed))
 			break;
 	}
-	int test = 0;
+	//int test = 0;
 
 	return color;
 
@@ -598,4 +604,8 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     //Result[id.xy] = float4(0.4,0.58,0.93,1.0);
 	//Result[id.xy] = float4(random(index),1);
 	//Result[id.xy] = float4(ray.direction, 1);
+	if(id.x < 1024 && id.y < 1024){
+		//Result[id.xy] = float4(Tex[id.xy].xyz,1);
+		//Result[id.xy] = float4(Materials[float3(id.xy,MeshIndex[0].material)].xyz,1);
+	}
 }
