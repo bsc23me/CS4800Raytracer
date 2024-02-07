@@ -28,7 +28,7 @@ public class CameraRaytracer : MonoBehaviour
 	[SerializeField] private bool sunLight = true;
 	[SerializeField] private Light sun;
 	[SerializeField] int sphereCount = 20;
-	[SerializeField] bool rotate = true;
+	[SerializeField] bool useBB = true;
 	[SerializeField] bool fastMath = false;
 
 	int TEXTURE_WIDTH = 1024;
@@ -40,6 +40,7 @@ public class CameraRaytracer : MonoBehaviour
 	ComputeBuffer UVBuffer;
 	ComputeBuffer meshBuffer;
 	ComputeBuffer IndicesBuffer;
+	ComputeBuffer BBBuffer;
 
 	List<PMesh> meshes;
 	List<Vector3> staticVertices;
@@ -48,6 +49,7 @@ public class CameraRaytracer : MonoBehaviour
 	List<Vector3> staticTriangles;
 	List<Texture2D> textures; Texture3D staticTextures;
 	List<PMesh> staticIndices;
+	List<BoundingBox> staticBoundingBoxes;
 
 	[SerializeField] Texture2D texture;
 	[SerializeField] Texture2D normalMap;
@@ -92,6 +94,7 @@ public class CameraRaytracer : MonoBehaviour
 		staticUVs = new List<Vector2>();
 		staticTriangles = new List<Vector3>();
 		textures = new List<Texture2D>();
+		staticBoundingBoxes = new List<BoundingBox>();
 		
 		staticIndices = new List<PMesh>() { createMesh(0, 0, 0, 0, 0) };
 
@@ -145,13 +148,14 @@ public class CameraRaytracer : MonoBehaviour
 		UVBuffer = new ComputeBuffer(staticUVs.Count, 2 * sizeof(float));
 		meshBuffer = new ComputeBuffer(staticTriangles.Count, 3 * sizeof(float));
 		IndicesBuffer = new ComputeBuffer(staticIndices.Count, 5 * sizeof(int));
+		BBBuffer = new ComputeBuffer(staticBoundingBoxes.Count, 6 * sizeof(float));
 
 		vertexBuffer.SetData(staticVertices);
 		normalBuffer.SetData(staticNormals);
 		UVBuffer.SetData(staticUVs);
 		meshBuffer.SetData(staticTriangles);
 		IndicesBuffer.SetData(staticIndices);
-
+		BBBuffer.SetData(staticBoundingBoxes);
 	}
 
 	private void OnDisable()
@@ -168,6 +172,8 @@ public class CameraRaytracer : MonoBehaviour
 			meshBuffer.Release();
 		if (IndicesBuffer != null)
 			IndicesBuffer.Release();
+		if (BBBuffer != null)
+			BBBuffer.Release();
 	}
 
 	// Start is called before the first frame update
@@ -234,13 +240,15 @@ public class CameraRaytracer : MonoBehaviour
 		rayTracingShader.SetBuffer(0, "Meshes", meshBuffer);
 		rayTracingShader.SetTexture(0, "Materials", staticTextures);
 		rayTracingShader.SetBuffer(0, "MeshIndex", IndicesBuffer);
-		rayTracingShader.SetTexture(0, "Tex", createTexture(TEXTURE_HEIGHT, 0xff0000ff));
+		rayTracingShader.SetBuffer(0, "BoundingBoxes", BBBuffer);
+		//rayTracingShader.SetTexture(0, "Tex", createTexture(TEXTURE_HEIGHT, 0xff0000ff)); // MEMORY LEAK: DO NOT USE
 		//rayTracingShader.SetTexture(0, "Norm", material.GetTexture("_BumpMap"));
 		//rayTracingShader.SetTexture(0, "Metal", met);
 
 		rayTracingShader.SetInt("SAMPLES", 1/*scene == 0 ? 1 : 32*/);
 		rayTracingShader.SetInt("TILE_SIZE", TILE_SIZE);
 		rayTracingShader.SetBool("fastMath", fastMath);
+		rayTracingShader.SetBool("useBB", useBB);
 		
 	}
 
@@ -320,7 +328,7 @@ public class CameraRaytracer : MonoBehaviour
 		return mesh;
 	}
 
-	Vector3 rotateVector(Vector3 vec, Vector3 rotation)
+	Vector3 rotateVector(Vector3 vec, Vector3 rotation, Vector3 scale)
 	{
 		float x, y, z;
 		Vector3[] rotX = new Vector3[] {
@@ -346,14 +354,18 @@ public class CameraRaytracer : MonoBehaviour
 
 		y = Vector3.Dot(v, rotX[0]);
 		z = Vector3.Dot(v, rotX[1]);
+
+		x *= Mathf.Sign(scale.x);
+		y *= Mathf.Sign(scale.y);
+		z *= Mathf.Sign(scale.z);
 		return new Vector3(x, y, z);
 	}
 
-	Vector3[] rotateVectors(Vector3[] vec, Vector3 rotation)
+	Vector3[] rotateVectors(Vector3[] vec, Vector3 rotation, Vector3 scale)
 	{
 		List<Vector3> rotVectors = new List<Vector3>();
 		foreach(Vector3 v in vec)
-			rotVectors.Add(rotateVector(v, rotation));
+			rotVectors.Add(rotateVector(v, rotation, scale));
 		return rotVectors.ToArray();
 	}
 	
@@ -361,7 +373,7 @@ public class CameraRaytracer : MonoBehaviour
 	{
 		Vector3 v = vertex;
 		v -= rotateAbout;
-		v = rotateVector(v, rotation);
+		v = rotateVector(v, rotation, scale);
 		v += rotateAbout;
 		v.x *= scale.x;
 		v.y *= scale.y;
@@ -384,7 +396,7 @@ public class CameraRaytracer : MonoBehaviour
 		List<Vector3> mesh = staticVertices.GetRange(staticIndices[obj].verts, staticIndices[obj + 1].verts - staticIndices[obj].verts);
 		List<Vector3> normals = staticNormals.GetRange(staticIndices[obj].normals, staticIndices[obj + 1].normals - staticIndices[obj].normals);
 		Vector3[] transformedMesh = transformVerts(mesh.ToArray(), Vector3.zero, rotation, t.position + rotateAbout, Vector3.one);
-		Vector3[] transformedNormals = rotateVectors(normals.ToArray(), rotation);
+		Vector3[] transformedNormals = rotateVectors(normals.ToArray(), rotation, Vector3.one);
 		for (int i = 0; i < mesh.Count; i++)
 			staticVertices[staticIndices[obj].verts + i] = transformedMesh[i];
 		for (int i = 0; i < normals.Count; i++)
@@ -425,21 +437,38 @@ public class CameraRaytracer : MonoBehaviour
 		List<PMesh> meshes = new List<PMesh>();
 		List<string> models = new List<string>();
 
-		for(int i = 0; i < SceneObj.transform.childCount; i++)
+		//for(int i = 0; i < SceneObj.transform.childCount; i++)
+		//{
+		//	Transform child = SceneObj.transform.GetChild(i);
+		//	if (child.gameObject.activeSelf)
+		//	{
+		//		LoadMesh(child.GetComponent<MeshFilter>().sharedMesh, child.position, child.eulerAngles, child.localScale, (textures.Count / TextureStride) + 1);
+		//		if (child.GetComponent<MeshRenderer>())
+		//		{						   //     Matte DE,    Matte E, Reflect DE,  Reflect E, Emissive (testing)
+		//			uint[] tests = new uint[] { 0x00000000, 0xff00ff00, 0x00ff0000, 0xffff0000, 0x0000ff00, 0x00cc0000 };
+		//			uint[] colors = new uint[] { 0x000000ff, 0xffffffff, 0xff0000ff };
+					
+		//			LoadTexture(child.GetComponent<MeshRenderer>().material, "_MainTex", colors[2]);
+		//			LoadTexture(child.GetComponent<MeshRenderer>().material, "_BumpMap", NORMAL);
+		//			LoadTexture(child.GetComponent<MeshRenderer>().material, "_MetallicGlossMap", tests[Mathf.Abs(6-i)]);
+		//		}
+		//		Debug.Log($"Run {i} times, Obj w/{child.position} position, Material: {(textures.Count / TextureStride) - 1}");
+		//	}
+		//}
+
+		foreach(MeshFilter meshFilter in SceneObj.GetComponentsInChildren<MeshFilter>(false))
 		{
-			Transform child = SceneObj.transform.GetChild(i);
-			if (child.gameObject.activeSelf)
+			Transform child = meshFilter.transform;
+			MeshRenderer renderer = child.GetComponent<MeshRenderer>();
+			LoadMesh(meshFilter.sharedMesh, child.position, child.eulerAngles, child.localScale, (textures.Count / TextureStride) + 1);
+			if (renderer)
 			{
-				if (child.GetComponent<MeshRenderer>())
-				{						   //     Matte DE,    Matte E, Reflect DE, Reflect E
-					uint[] tests = new uint[] { 0x00000000, 0xffffff00, 0x000000ff, 0xffffffff };
-					uint[] colors = new uint[] { 0x000000ff, 0xffffffff, 0xff0000ff };
-					LoadTexture(child.GetComponent<MeshRenderer>().material, "_MainTex", colors[2]);
-					LoadTexture(child.GetComponent<MeshRenderer>().material, "_BumpMap", tests[0]);
-					LoadTexture(child.GetComponent<MeshRenderer>().material, "_MetallicGlossMap", tests[2]);
-				}
-				LoadMesh(child.GetComponent<MeshFilter>().sharedMesh, child.position, child.eulerAngles, child.localScale, (textures.Count / TextureStride) - 1);
-				Debug.Log($"Run {i} times, Obj w/{child.position} position, Material: {(textures.Count / TextureStride) - 1}");
+				uint[] tests = new uint[] { 0x00000000, 0xff00ff00, 0x00ff0000, 0xffff0000, 0x0000ff00, 0x00cc0000 };
+				uint[] colors = new uint[] { 0x000000ff, 0xffffffff, 0xff0000ff };
+
+				LoadTexture(renderer.material, "_MainTex", colors[1]);
+				LoadTexture(renderer.material, "_BumpMap", NORMAL);
+				LoadTexture(renderer.material, "_MetallicGlossMap", tests[0]);
 			}
 		}
 /*
@@ -454,9 +483,10 @@ public class CameraRaytracer : MonoBehaviour
 
 	void LoadMesh(Mesh mesh, Vector3 position, Vector3 rotation, Vector3 rotateAbout, Vector3 scale, int material = -1)
 	{
-		
-		staticVertices.AddRange(transformVerts(mesh.vertices, position, rotation, rotateAbout, scale));
-		staticNormals.AddRange(rotateVectors(mesh.normals, rotation));
+		Vector3 rot = rotation * Mathf.Deg2Rad;
+		Vector3[] vertices = transformVerts(mesh.vertices, position, rot, rotateAbout, scale);
+		staticVertices.AddRange(vertices);
+		staticNormals.AddRange(rotateVectors(mesh.normals, rot, scale));
 		staticUVs.AddRange(mesh.uv);
 		staticTriangles.AddRange(LoadFaces(mesh.triangles));
 
@@ -466,6 +496,23 @@ public class CameraRaytracer : MonoBehaviour
 			staticIndices.Add(addMesh(pMesh, staticIndices[staticIndices.Count - 1]));
 		else
 			staticIndices.Add(pMesh);
+
+		float x1 = float.PositiveInfinity, y1 = float.PositiveInfinity, z1 = float.PositiveInfinity;
+		float x2 = float.NegativeInfinity, y2 = float.NegativeInfinity, z2 = float.NegativeInfinity;
+		foreach(Vector3 vert in vertices)
+		{
+			x1 = Mathf.Min(x1, vert.x);
+			y1 = Mathf.Min(y1, vert.y);
+			z1 = Mathf.Min(z1, vert.z);
+
+			x2 = Mathf.Max(x2, vert.x);
+			y2 = Mathf.Max(y2, vert.y);
+			z2 = Mathf.Max(z2, vert.z);
+		}
+		BoundingBox bb;
+		bb.lowerBound = new Vector3(x1, y1, z1);
+		bb.upperBound = new Vector3(x2, y2, z2);
+		staticBoundingBoxes.Add(bb);
 	}
 	void LoadMesh(Mesh mesh, Vector3 position, Vector3 rotation, Vector3 scale, int material = -1)
 	{
@@ -501,7 +548,7 @@ public class CameraRaytracer : MonoBehaviour
 			else if (lines[i].StartsWith("vn"))
 			{
 				normals++;
-				staticNormals.Add(rotateVector(LoadVector(lines[i]), rotation));
+				staticNormals.Add(rotateVector(LoadVector(lines[i]), rotation, Vector3.one));
 			}
 			else if (lines[i].StartsWith("f "))
 			{
@@ -651,6 +698,12 @@ struct PMesh
 	public int faces;
 	public int material;
 	
+}
+
+struct BoundingBox
+{
+	public Vector3 lowerBound;
+	public Vector3 upperBound;
 }
 
 #endregion

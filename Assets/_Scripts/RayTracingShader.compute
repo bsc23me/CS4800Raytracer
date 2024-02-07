@@ -19,6 +19,7 @@ int SAMPLES;
 int TILE_SIZE;
 
 bool fastMath;
+bool useBB;
 bool sunLight;
 float4 Sun;
 
@@ -121,6 +122,11 @@ struct MeshIndices{
 	int material;
 };
 
+struct BoundingBox{
+	float3 lowerBound;
+	float3 upperBound;
+};
+
 StructuredBuffer<Sphere> spheres;
 StructuredBuffer<float3> Vertices;
 StructuredBuffer<float3> VNormals;
@@ -128,6 +134,7 @@ StructuredBuffer<float2> UVs;
 StructuredBuffer<float3> Meshes;
 Texture3D<float4> Materials;
 StructuredBuffer<MeshIndices> MeshIndex;
+StructuredBuffer<BoundingBox> BoundingBoxes;
 
 Texture2D<float4> Tex;
 Texture2D<float4> Norm;
@@ -292,15 +299,16 @@ void updateHitMaterial(inout HitInfo hit, int material, float2 uv){
 		hit.albedo = Materials[float3(uv,3*material+0)].xyz;
 		//hit.albedo = 1;
 		//hit.normal += Materials[float3(uv,3*material+1)].xyz;
-		hit.smoothness = Materials[float3(uv,3*material+2)].w;
+		hit.smoothness = Materials[float3(uv,3*material+2)].y;
 		hit.metalic = Materials[float3(uv,3*material+2)].x;
 		hit.emission = 0;
-		hit.emissionStrength = 0;
+		hit.emissionStrength = Materials[float3(uv,3*material+2)].z;
+		//hit.transmission = Materials[float3(uv,3*material+2)].w;
 	}
 }
 
 // Renders a basic Skybox
-float3 SkyboxIntersect(Ray ray){
+float3 SkyboxIntersect(Ray ray, inout float3 diffuse){
 	// looking at the sun
 	/*if(dot(ray.direction,-Sun.xyz) > 0.999) // => 0.999 determines the size of the sun: x => 0 sun fills sky | x => 1 sun shrinks to point
 		return 1; // sun is pure white
@@ -311,7 +319,9 @@ float3 SkyboxIntersect(Ray ray){
 	float3 sky = y > 0 ? float3(0.4*(1-y)*(1-y), 0.8*(1-y)*(1-y), 1.0) : 0.4;
 
 	float sun = pow(max(0, dot(ray.direction,-Sun.xyz)), 32);
-	return lerp(sky, 1, sun);
+	diffuse = lerp(sky, 1, sun);
+	//return sun;
+	return diffuse;
 }
 
 float3 NightSkyboxIntersect(Ray ray){
@@ -326,6 +336,34 @@ float3 NightSkyboxIntersect(Ray ray){
 
 	//float sun = pow(max(0, dot(ray.direction,-Sun.xyz)), 32);
 	return sky;
+}
+
+bool BoxIntersect(Ray ray, float3 lb, float3 ub){
+	float tmin = -1.#INF;
+	float tmax = 1.#INF;
+
+	if(ray.direction.x != 0){
+		float tx1 = (lb.x - ray.origin.x)/ray.direction.x;
+		float tx2 = (ub.x - ray.origin.x)/ray.direction.x;
+
+		tmin = max(tmin,min(tx1,tx2));
+		tmax = min(tmax,max(tx1,tx2));
+	}
+	if(ray.direction.y != 0){
+		float ty1 = (lb.y - ray.origin.y)/ray.direction.y;
+		float ty2 = (ub.y - ray.origin.y)/ray.direction.y;
+
+		tmin = max(tmin,min(ty1,ty2));
+		tmax = min(tmax,max(ty1,ty2));
+	}
+	if(ray.direction.z != 0){
+		float tz1 = (lb.z - ray.origin.z)/ray.direction.z;
+		float tz2 = (ub.z - ray.origin.z)/ray.direction.z;
+
+		tmin = max(tmin,min(tz1,tz2));
+		tmax = min(tmax,max(tz1,tz2));
+	}
+	return tmax >= tmin;
 }
 
 //Determines whether a plane was hit using an arbitrary point on the plane
@@ -346,7 +384,7 @@ void PlaneIntersect(Ray ray, Plane plane, inout HitInfo hit){
 	}
 }
 
-bool TriangleIntersect(Ray ray, float3 tri, MeshIndices indices, inout HitInfo hit){
+bool TriangleIntersect(Ray ray, float3 tri, MeshIndices indices, int material, inout HitInfo hit){
 	uint w, h, z;
 	Materials.GetDimensions(w,h,z);
 	float3 vidx = indices.vertOffset + tri;
@@ -371,7 +409,7 @@ bool TriangleIntersect(Ray ray, float3 tri, MeshIndices indices, inout HitInfo h
 				hit.distance = t;
 				//hit.albedo = 1;
 				//hit.smoothness = Metal[texSpace].w;
-				updateHitMaterial(hit, indices.material, texSpace);
+				updateHitMaterial(hit, material, texSpace);
 				return true;
 			}
 		}
@@ -437,7 +475,13 @@ HitInfo RayCollision(Ray ray){
 	int currMesh = 0;
 	for(uint i = 1; i <= meshCount; i++){
 		for(uint j = 0; j < MeshIndex[i].faceOffset; j++){
-			TriangleIntersect(ray,Meshes[MeshIndex[i-1].faceOffset+j],MeshIndex[i-1],hit);
+			// bool box1 = BoxIntersect(ray,float3(-1,-1,-1),float3(1,1,1));
+			// bool box2 = BoxIntersect(ray,float3(1,-1,-1),float3(3.14,1,1));
+			// bool box = i == 1 ? box1 : box2;
+
+			if(!useBB || BoxIntersect(ray,BoundingBoxes[i-1].lowerBound,BoundingBoxes[i-1].upperBound)){
+				TriangleIntersect(ray,Meshes[MeshIndex[i-1].faceOffset+j],MeshIndex[i-1],i-1,hit);
+			}
 		}
 	}
 
@@ -452,37 +496,62 @@ HitInfo RayCollision(Ray ray){
 // associated with the intersections in the scene
 float3 FireRay(Ray ray, inout uint seed){
 	float3 color = 0;
-	float energy = 1;
+	float3 energy = 1;
 	int bounces = 1;
 
-	float fresnels[MAX_BOUNCES];
+	//float fresnels[MAX_BOUNCES];
 	for(int i = 0; i < MAX_BOUNCES; i++){
 		HitInfo hit = RayCollision(ray);
 
 		float3 diffuse;
+		float3 emission;
 		if(hit.distance < 1.#INF){
 			diffuse = hit.albedo;
+			emission = hit.emissionStrength;
 			Ray shadowRay = CreateRay(hit.hitPoint + hit.normal * 0.001, -1*Sun.xyz); // fire ray toward light source
 			HitInfo shadowHit = RayCollision(shadowRay); // check shadow ray collisions
 			if(shadowHit.distance < 1.#INF) // if the light is blocked
 				diffuse *= 0.05; // the point is in shadow
 			else
 				diffuse *= max(0.05,saturate(dot(-1*Sun.xyz, hit.normal))) * Sun.w;
-		}else
-			diffuse = SkyboxIntersect(ray);
 
-		float s = pow(8192, min(max(0,1-hit.smoothness),0.9));
-		float glossy = pow(max(0, 1-dot(-ray.direction, hit.normal)), s);
-		fresnels[i] = hit.distance < 1.#INF ? glossy : 0;
+			float s = pow(8192, min(max(0,1-hit.smoothness),1));
+			float glossy = pow(max(0, 1-dot(-ray.direction, hit.normal)), s);
+			float f = hit.distance < 1.#INF ? glossy : 0;
 
-		// float f = 1;
+			if(hit.metalic == 0){
+				color += energy * (1-f) * diffuse;
+				energy += emission;
+				energy *= f;
+			}else{
+				color += energy * emission;
+				energy *= diffuse;
+			}
+		}else{
+			color += energy * SkyboxIntersect(ray, diffuse);
+		}
+
+		
+
+		// float phongSmoothness = pow(8192, min(max(0,hit.smoothness),1));
+		// float shinyness = pow(max(0, dot(-Sun.xyz, hit.normal)), phongSmoothness);
+
+		// diffuse = lerp(diffuse,1,shinyness);
+
+		//fresnels[i] = hit.distance < 1.#INF ? glossy : 0;
+
+		
 		// for(int j = 0; j < i; j++)
 		// 	f *= fresnels[j];
 		
+		
+		//energy += emission;
+		//color += energy * (1-f) * diffuse;
 
-		color += energy * (1-fresnels[i]) * diffuse;
+		//energy *= f;
 
-		energy *= fresnels[i];
+		// color += energy * emission;		
+		// energy *= diffuse;
 
 		if(!Bounce(ray, hit, seed))
 			break;
@@ -535,12 +604,12 @@ float3 FireRay(Ray ray, inout uint seed){
 			}
 
 			energy *= hit.smoothness;
-			if(energy < 0.001)
-				break;
+			// if(energy < 0.001)
+			// 	break;
 			
 		}
 		else{
-			color = SkyboxIntersect(ray);
+			//color = SkyboxIntersect(ray);
 			//color = lerp(color, SkyboxIntersect(ray), energy);
 			break;
 		}
@@ -573,7 +642,7 @@ float3 Shade(inout Ray ray, HitInfo hit, inout uint seed){
 		return saturate((-dot(Sun.xyz, hit.normal)) + 0.05) * Sun.w * hit.albedo;*/
 	}else{
 		ray.energy = 0.0;
-		return SkyboxIntersect(ray);
+		return 0/*SkyboxIntersect(ray)*/;
 	}
 }
 
@@ -607,5 +676,6 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 	if(id.x < 1024 && id.y < 1024){
 		//Result[id.xy] = float4(Tex[id.xy].xyz,1);
 		//Result[id.xy] = float4(Materials[float3(id.xy,MeshIndex[0].material)].xyz,1);
+		//Result[id.xy] = MeshIndex[1].material;
 	}
 }
