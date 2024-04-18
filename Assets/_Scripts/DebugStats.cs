@@ -19,7 +19,8 @@ public class DebugStats : MonoBehaviour
 	{
 		float t = Time.deltaTime;
 		float fr = 1 / t;
-		return $"Δt: {t}\nFramerate: {fr}";
+		int tris = GetComponent<CameraRaytracer>().Tris;
+		return $"Δt: {t}\nFramerate: {fr}\nTris: {tris}";
 	}
 
 	void UpdateText()
