@@ -15,12 +15,15 @@ public class DebugStats : MonoBehaviour
 		UpdateText();
     }
 
+	/// <summary>
+	/// lists previous frame's delta time and the current framerate
+	/// </summary>
+	/// <returns>string of debug info</returns>
 	string debugStats()
 	{
 		float t = Time.deltaTime;
 		float fr = 1 / t;
-		int tris = GetComponent<CameraRaytracer>().Tris;
-		return $"Δt: {t}\nFramerate: {fr}\nTris: {tris}";
+		return $"Δt: {t}\nFramerate: {fr}";
 	}
 
 	void UpdateText()

@@ -1,13 +1,11 @@
 // Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel CSMain
 
-// Create a RenderTexture with enableRandomWrite flag and set it
-// with cs.SetTexture => CameraRaytracer.Render(): line 3 
-
 // Output RenderTexture
 RWTexture2D<float4> Result;
 
 #define MAX_BOUNCES 3
+#define TILE_SIZE 8
 #define PI 3.14159265
 
 // Define how large the tiles are
@@ -17,17 +15,18 @@ RWTexture2D<float4> Result;
 float4x4 CameraToWorldMat;
 float4x4 InversePerspectiveProjMat;
 
-int SAMPLES;
-int TILE_SIZE;
-
-bool fastMath;
-bool useBB;
+// Scene variables
 bool sunLight;
 float4 Sun;
 
+// Shader variables
+int SAMPLES;
+uint randomState = 2;
+bool fastMath;
+bool useBB;
+
 uint meshCount;
 
-uint randomState = 2;
 
 ////////////////////////////////////////////////////////////////////////
 // Random Functions
@@ -44,6 +43,7 @@ float random(inout uint seed){
 	return result / 4294967295.0;
 }
 
+// seeded random which does not modify the input
 float randomf(uint seed){
 	seed = seed * 747796405 + 2891336453;
 	uint result = ((seed >> ((seed >> 28) + 4)) ^ seed) * 277803737;
@@ -51,12 +51,14 @@ float randomf(uint seed){
 	return result / 4294967295.0;
 }
 
+// returns a random value which is normally distributed (non-uniform)
 float randomNormal(inout uint seed){
-	float theta = 2 * 3.14159 * random(seed);
+	float theta = 2 * PI * random(seed);
 	float rho = sqrt(-2 * log(random(seed)));
 	return rho * cos(theta);
 }
 
+// returns a random unit vector which is in the same hemisphere as a given normal
 float3 randomDirection(inout uint seed, float3 normal){
 	float x = randomNormal(seed);
 	float y = randomNormal(seed);
@@ -70,54 +72,48 @@ float3 randomDirection(inout uint seed, float3 normal){
 // Structures
 ////////////////////////////////////////////////////////////////////////
 
-struct PMaterial{
-	float3 albedo;
-	float smoothness;
-	float metalic;
-	float3 emission;
-	float emissionStrength;
-};
-
+// Contains all of the information about a given ray hit
 struct HitInfo
 {
-	float3 hitPoint;
-	float3 normal;
-	float distance;
-	float3 albedo;
-	float smoothness;
-	float metalic;
-	float3 emission;
-	float emissionStrength;
+	float3 hitPoint; // the location where the hit occured
+	float3 normal; // the normal of the surface at the hit point
+	float distance; // the distance the given hit is from the camera
+	float3 albedo; // the albedo of the material at the hit point
+	float smoothness; // the smoothness of the material at the hit point
+	float metallic; // the metallic of the material at the hit point
+	float3 emission; // the emission of the material at the hit point
+	float emissionStrength; // the emission strength of the material at the hit point
 };
 
-// Ray Structure
+// Contains information about a given ray
 struct Ray
 {
-	float3 origin;
-	float3 direction;
-	float3 energy;
+	float3 origin; // the starting location from which the ray originated
+	float3 direction; // the direction the ray is travelling
 };
 
+// DEPRECATED | Contains information about a given sphere
 struct Sphere
 {
 	float3 center;
 	float radius;
-	PMaterial material;
 };
 
+// Contains information about a given plane
 struct Plane
 {
 	float3 position;
 	float3 normal;
-	PMaterial material;
 };
 
+// DEPRECATED | Contains information about a given triangle
 struct Triangle{
-	int3 points;
-	int3 uv;
-	int normal;
+	int3 points; // 3 integer indices which correspond to float3 points in the vertices buffer
+	int3 uv; // 3 integer indices which correspond to float2 points in the UVs buffer
 };
 
+// Contains a mesh's buffer offsets
+// Each offset tells where in the respective buffer this mesh starts
 struct MeshIndices{
 	uint vertOffset;
 	uint normalOffset;
@@ -126,38 +122,34 @@ struct MeshIndices{
 	int material;
 };
 
+// Contains information about the given bounds of a bounding box
 struct BoundingBox{
 	float3 lowerBound;
 	float3 upperBound;
 };
 
-StructuredBuffer<Sphere> spheres;
+// Data Buffers
 StructuredBuffer<float3> Vertices;
 StructuredBuffer<float3> VNormals;
 StructuredBuffer<float2> UVs;
 StructuredBuffer<uint3> Meshes;
+StructuredBuffer<BoundingBox> BoundingBoxes;
 Texture3D<float4> Materials;
 StructuredBuffer<MeshIndices> MeshIndex;
-StructuredBuffer<BoundingBox> BoundingBoxes;
-
-Texture2D<float4> Tex;
-Texture2D<float4> Norm;
-Texture2D<float4> Metal;
-
-Texture3D<float4> AlbedoMap;
 
 ////////////////////////////////////////////////////////////////////////
 // Structure Factories
 ////////////////////////////////////////////////////////////////////////
 
+// Ray Init
 Ray CreateRay(float3 origin, float3 direction){
 	Ray ray;
 	ray.origin = origin;
 	ray.direction = direction;
-	ray.energy = float3(1.0, 1.0, 1.0);
 	return ray;
 }
 
+// Ray Init projecting a uv coord into world space using perspective projection
 Ray CreateCameraRay(float2 uv){
 	float3 origin = mul(CameraToWorldMat, float4(0.0, 0.0, 0.0, 1.0)).xyz;
 	float3 direction = mul(InversePerspectiveProjMat, float4(uv, 0.0, 1.0)).xyz;
@@ -166,6 +158,7 @@ Ray CreateCameraRay(float2 uv){
 	return CreateRay(origin, direction);
 }
 
+// HitInfo Init
 HitInfo CreateRayHit(){
     HitInfo hit;
     hit.hitPoint = float3(0.0, 0.0, 0.0);
@@ -174,48 +167,16 @@ HitInfo CreateRayHit(){
     hit.albedo = float3(0.0, 0.0, 0.0);
     hit.emission = float3(0.0, 0.0, 0.0);
 	hit.emissionStrength = 0;
-	hit.metalic = 0.0;
+	hit.metallic = 0.0;
 	hit.smoothness = 0.0;
     return hit;
 }
 
-/*
-
-Sphere CreateSphere(float3 position, float radius){
-	Sphere sphere;
-	sphere.center = position;
-	sphere.radius = radius;
-	sphere.material.albedo = 1;
-	sphere.material.emission = 0;
-	sphere.material.emissionStrength = 0;
-	return sphere;
-}
-
-Triangle CreateTriangle(float3 a, float3 b, float3 c){
-	Triangle tri;
-	tri.ptA = a;
-	tri.ptB = b;
-	tri.ptC = c;
-	tri.normal = cross(c-a,b-a);
-	tri.material.albedo = float3(0,1,0);
-	tri.material.emission = 0;
-	tri.material.emissionStrength = 0;
-	tri.material.smoothness = 0.8;
-	tri.material.metalic = 0;
-	return tri;
-}
-
-*/
-
+// Plane Init
 Plane CreatePlane(float3 position, float3 normal){
 	Plane plane;
 	plane.position = position;
 	plane.normal = normal;
-	//plane.material.albedo = 1;
-	plane.material.emission = 1;
-	plane.material.emissionStrength = 1;
-	plane.material.smoothness = 0;
-	plane.material.metalic = 0;
 	return plane;
 }
 
@@ -223,6 +184,7 @@ Plane CreatePlane(float3 position, float3 normal){
 // Triangle Helper Functions
 ////////////////////////////////////////////////////////////////////////
 
+// Computes the area of a triangle using Heron's formula
 float TriangleArea(float3 ptA, float3 ptB, float3 ptC){
 	float a = length(ptA - ptB);
 	float b = length(ptA - ptC);
@@ -232,13 +194,23 @@ float TriangleArea(float3 ptA, float3 ptB, float3 ptC){
 	return area;
 }
 
+// DEPRECATED | Computes area given a triangle struct
 float TriangleArea(Triangle tri){
 	return TriangleArea(Vertices[tri.points.x], Vertices[tri.points.y], Vertices[tri.points.z]);
 }
 
+// Computes the square of the area of a triangle
+// Postpones the squareroot to improve performance
+float TriangleSquareArea(float3 x, float3 y, float3 z){
+	float a = (x.x - y.x) * (x.x - y.x) + (x.y - y.y) * (x.y - y.y) + (x.z - y.z) * (x.z - y.z);
+	float b = (x.x - z.x) * (x.x - z.x) + (x.y - z.y) * (x.y - z.y) + (x.z - z.z) * (x.z - z.z);
+	float c = (z.x - y.x) * (z.x - y.x) + (z.y - y.y) * (z.y - y.y) + (z.z - y.z) * (z.z - y.z);
+	float areaA2 = -a*a - b*b - c*c + 2*a*b + 2*a*c + 2*b*c;
+	return areaA2 / 2;
+}
+
 // Converts a given Cartesian point to the provided triangle specific Barycenteric coordinates
-float3 CartToBary(uint3 tri, float3 cart)
-{
+float3 CartToBary(uint3 tri, float3 cart){
 	float3 x = Vertices[tri.x];
 	float3 y = Vertices[tri.y];
 	float3 z = Vertices[tri.z];
@@ -249,19 +221,7 @@ float3 CartToBary(uint3 tri, float3 cart)
 	return float3(alpha,beta,gamma);
 }
 
-float2 BaryToUV(uint3 tri, float3 bary){
-	float2x3 a = float2x3(UVs[tri.x], UVs[tri.y], UVs[tri.z]);
-	return mul(a,bary);
-}
-
-float TriangleSquareArea(float3 x, float3 y, float3 z){
-	float a = (x.x - y.x) * (x.x - y.x) + (x.y - y.y) * (x.y - y.y) + (x.z - y.z) * (x.z - y.z);
-	float b = (x.x - z.x) * (x.x - z.x) + (x.y - z.y) * (x.y - z.y) + (x.z - z.z) * (x.z - z.z);
-	float c = (z.x - y.x) * (z.x - y.x) + (z.y - y.y) * (z.y - y.y) + (z.z - y.z) * (z.z - y.z);
-	float areaA2 = -a*a - b*b - c*c + 2*a*b + 2*a*c + 2*b*c;
-	return areaA2 / 2;
-}
-
+// Uses the Postponed squareroot to improve performance
 float3 FastBary(float3 tri, float3 cart){
 	float3 x = Vertices[tri.x];
 	float3 y = Vertices[tri.y];
@@ -273,74 +233,50 @@ float3 FastBary(float3 tri, float3 cart){
 	return float3(alpha,beta,gamma);
 }
 
-// Returns true if a given Cartesian point is inside a triangle
-/*bool PointInTri(Triangle tri, float3 p)
-{
-	float3 baryPoint = CartToBary(tri, 0, p);
-
-	// account for floating point error
-	float x = baryPoint.x + baryPoint.y + baryPoint.z - 1;
-	return abs(x) < 0.001; // Try higher or lower to get better results (higher seemed to be better so far)
-
-	//return baryPoint.x + baryPoint.y + baryPoint.z == 1;
-}*/
+// Converts a Barycenteric point to a UV coordinate
+float2 BaryToUV(uint3 tri, float3 bary){
+	float2x3 a = float2x3(UVs[tri.x], UVs[tri.y], UVs[tri.z]);
+	return mul(a,bary);
+}
 
 ////////////////////////////////////////////////////////////////////////
 // Collision Detection Functions
 ////////////////////////////////////////////////////////////////////////
 
+// Update the hit material data with the object's material info
+// Normal maps are not implemented for now
 void updateHitMaterial(inout HitInfo hit, int material, float2 uv){
 	int width, height, depth;
 	Materials.GetDimensions(width,height,depth);
+	// if invalid material
 	if(material < 0 || material >= depth){
 		hit.albedo = 1;
+		hit.metallic = 0;
 		hit.smoothness = 0.2;
-		hit.metalic = 0;
-		hit.emission = 0;
 		hit.emissionStrength = 0;
+		hit.emission = 0;
 	}else{
 		hit.albedo = Materials[float3(uv,3*material+0)].xyz;
-		//hit.albedo = 1;
-		//hit.normal += Materials[float3(uv,3*material+1)].xyz;
+		hit.metallic = Materials[float3(uv,3*material+2)].x;
 		hit.smoothness = Materials[float3(uv,3*material+2)].y;
-		hit.metalic = Materials[float3(uv,3*material+2)].x;
-		hit.emission = 0;
 		hit.emissionStrength = Materials[float3(uv,3*material+2)].z;
-		//hit.transmission = Materials[float3(uv,3*material+2)].w;
+		hit.emission = 0;
 	}
 }
 
 // Renders a basic Skybox
-float3 SkyboxIntersect(Ray ray, inout float3 diffuse){
-	// looking at the sun
-	/*if(dot(ray.direction,-Sun.xyz) > 0.999) // => 0.999 determines the size of the sun: x => 0 sun fills sky | x => 1 sun shrinks to point
-		return 1; // sun is pure white
-		*/
+float3 SkyboxIntersect(Ray ray){
 
 	// looking above horizon
 	float y = ray.direction.y; // V sky is gradient from dark to light | V ground is mid gray
 	float3 sky = y > 0 ? float3(0.4*(1-y)*(1-y), 0.8*(1-y)*(1-y), 1.0) : 0.4;
 
 	float sun = pow(max(0, dot(ray.direction,-Sun.xyz)), 32);
-	diffuse = lerp(sky, 1, sun);
-	//return sun;
-	return diffuse;
+	return lerp(sky, 1, sun);
 }
 
-float3 NightSkyboxIntersect(Ray ray){
-	// looking at the moon
-	if(dot(ray.direction,-Sun.xyz) > 0.999) // => 0.999 determines the size of the moon: x => 0 sun fills sky | x => 1 moon shrinks to point
-		return 1; // moon is pure white
-
-	float light = pow(randomf(floor(abs(2000000000.0*ray.direction.x))), 1000);
-	// looking above horizon
-	float y = ray.direction.y; // V sky is gradient from dark to light | V ground is mid gray
-	float3 sky = y > 0 ? light : float3(0.0, 0, 0.15);
-
-	//float sun = pow(max(0, dot(ray.direction,-Sun.xyz)), 32);
-	return sky;
-}
-
+// Checks if a ray intersects a box
+// Primarily used for bounding box checks
 bool BoxIntersect(Ray ray, float3 lb, float3 ub){
 	float tmin = -1.#INF;
 	float tmax = 1.#INF;
@@ -387,33 +323,41 @@ void PlaneIntersect(Ray ray, Plane plane, inout HitInfo hit){
 	}
 }
 
+// Computes the intersection of a ray and a triangle
+// Returns true if the ray intersected a triangle
 bool TriangleIntersect(Ray ray, uint3 tri, MeshIndices indices, int material, inout HitInfo hit){
 	uint w, h, z;
 	Materials.GetDimensions(w,h,z);
+
+	// Triangle information
 	uint3 vidx = indices.vertOffset + tri;
 	float3x3 verts = float3x3(Vertices[vidx.x], Vertices[vidx.y], Vertices[vidx.z]);
 	float3 normal = normalize(cross(verts[1]-verts[0], verts[2]-verts[0]));
 
+	// Intersection information
+	float d = dot(ray.direction, normal);
+	float3 v = verts[0] - ray.origin;
+
+	// Mesh normal information (phong interpolation)
 	float3 nidx = indices.normalOffset + tri;
 	float3x3 vnormals = float3x3(VNormals[nidx.x], VNormals[nidx.y], VNormals[nidx.z]);
-	float3 v = Vertices[indices.vertOffset + tri.x] - ray.origin;
-	float d = dot(ray.direction, normal);
-	float occ = dot(ray.direction, normalize(v));
-	if(d < 0 /*&& occ > 0*/){
+
+	if(d < 0){ // d < 0 yields backface culling
+		// Plane intersection check
 		float t = dot(v, normal) / d;
 		float3 p = ray.origin + t * ray.direction;
 		if(t > 0 && t < hit.distance){
 			float3 bary = CartToBary(vidx, p);
-			if(abs(bary.x + bary.y + bary.z - 1) < 0.005){
-				float2 uv = BaryToUV(tri+indices.uvOffset,bary);
-				int2 texSpace = int2(uv.x * w, uv.y * h);
+			// barycentric total == 1 ? point in triangle
+			if(abs(bary.x + bary.y + bary.z - 1) < 0.005){ // 0.005 epsilon
+				// Updating Hit Information
 				hit.hitPoint = p;
 				hit.normal = normalize(mul(transpose(vnormals),bary));
 				hit.distance = t;
-				//hit.albedo = 1;
-				//hit.metalic = 1;
-				//hit.smoothness = 1;
-				//hit.smoothness = Metal[texSpace].w;
+				// Texture Information
+				float2 uv = BaryToUV(tri+indices.uvOffset,bary);
+				int2 texSpace = int2(uv.x * w, uv.y * h);
+				// Material Information
 				updateHitMaterial(hit, material, texSpace);
 				return true;
 			}
@@ -438,7 +382,7 @@ void SphereIntersect(Ray ray, Sphere sphere, inout HitInfo hit){
 		hit.hitPoint = ray.origin + t1 * ray.direction;
 		hit.normal = normalize(hit.hitPoint - sphere.center);
 		hit.distance = t1;
-		hit.smoothness = sphere.material.smoothness;
+		//hit.smoothness = sphere.material.smoothness;
 		//updateHitMaterial(hit, sphere.material, 0);
 	}
 }
@@ -447,14 +391,16 @@ void SphereIntersect(Ray ray, Sphere sphere, inout HitInfo hit){
 // General Helper Functions
 //////////////////////////////////////////////////////////////////////////
 
-
-bool Bounce(inout Ray ray, HitInfo hit, bool light, inout uint seed){
+// Reflects a ray off of a surface 
+bool Bounce(inout Ray ray, HitInfo hit, inout uint seed){
 	if(hit.distance < 1.#INF){
 		ray.origin = hit.hitPoint + hit.normal * 0.001;
+
+		// Direction determined by surface material properties
 		float3 diffuseRay = normalize(hit.normal + randomDirection(seed, hit.normal));
 		float3 specularRay = reflect(ray.direction, hit.normal);
-
 		ray.direction = lerp(diffuseRay, specularRay, hit.smoothness);
+
 		return true;
 	}
 	else{
@@ -462,29 +408,22 @@ bool Bounce(inout Ray ray, HitInfo hit, bool light, inout uint seed){
 	}
 }
 
-
-
+// Checks all collisions for a given ray in a scene and
+// Returns the HitInfo for the closest intersection to the camera
 HitInfo RayCollision(Ray ray){
 	HitInfo hit = CreateRayHit();
-	PlaneIntersect(ray, CreatePlane(float3(0.0, 0.0, 0.0),float3(0.0, 1.0, 0.0)), hit); // Ground plane hit
-	// Scene Spheres
-	uint sphereCount, stride;
-	spheres.GetDimensions(sphereCount, stride);
-	for(uint i = 0; i < sphereCount; i++){
-		//SphereIntersect(ray,spheres[i],hit);
-	}
-	//uint meshCount, meshStride;
-	uint triCount, triStride;
-	//MeshIndex.GetDimensions(meshCount, meshStride);
-	//Meshes.GetDimensions(triCount, triStride);
+	PlaneIntersect(ray, CreatePlane(0,float3(0.0, 1.0, 0.0)), hit); // Ground plane hit
+
+	// Loop over each mesh
 	for(uint i = 1; i < meshCount; i++){
+		// Check bounding boxes if they're in use
 		if(!useBB || BoxIntersect(ray,BoundingBoxes[i-1].lowerBound,BoundingBoxes[i-1].upperBound)){
+			// Loop over every triangle in the mesh
 			for(uint j = MeshIndex[i-1].faceOffset; j < MeshIndex[i].faceOffset; j++){
 				TriangleIntersect(ray,Meshes[j],MeshIndex[i-1],i-1,hit);
 			}
 		}
 	}
-
 	return hit;
 }
 
@@ -497,197 +436,64 @@ HitInfo RayCollision(Ray ray){
 float3 FireRay(Ray ray, inout uint seed){
 	float3 color = 0;
 	float3 energy = 1;
-	int bounces = 1;
-	bool spec = false;
 
-	//float fresnels[MAX_BOUNCES];
 	for(int i = 0; i < MAX_BOUNCES; i++){
 		HitInfo hit = RayCollision(ray);
 
-		float3 diffuse;
-		float3 emission;
 		if(hit.distance < 1.#INF){
-			diffuse = hit.albedo;
-			emission = hit.emissionStrength;
+			float3 diffuse = hit.albedo;
 
 			Ray shadowRay = CreateRay(hit.hitPoint + hit.normal * 0.001, -1*Sun.xyz); // fire ray toward light source
 			HitInfo shadowHit = RayCollision(shadowRay); // check shadow ray collisions
 			if(shadowHit.distance < 1.#INF) // if the light is blocked
-				diffuse *= /*float3(0.42,0.478,0.627) * 1*/0.05; // the point is in shadow
+				diffuse *= 0.05; // the point is in shadow
 			else
-				diffuse *= max(0.05,saturate(dot(-1*Sun.xyz, hit.normal))) * Sun.w;
+				diffuse *= max(0.05,saturate(dot(-1*Sun.xyz, hit.normal))) * Sun.w; // shading handled by Lampertian cosine
 
+			// strength of the fresnel is determined by the smoothness of the material
 			float s = pow(8192, saturate(1-hit.smoothness));
-			float glossy = pow(max(0, 1-dot(-ray.direction, hit.normal)), s);
-			float f = hit.distance < 1.#INF ? glossy : 0;
+			// fresnel is computed based on the angle between the camera ray and the surface normal
+			float fresnel = pow(clamp(1-saturate(dot(-ray.direction, hit.normal)), 0, 0.999), s);
 
-			// if(hit.metalic == 0){
-			// 	color += energy * (1-f) * diffuse;
-			// 	energy += emission;
-			// 	energy *= f;
-			// }else{
-				spec = hit.metalic >= randomf(seed);
-				color += energy * emission;
-				energy *= lerp(diffuse,1,hit.metalic);
-				// if(!spec)
-				// 	break;
-			//}
-		}else{
-			color += energy * SkyboxIntersect(ray, diffuse) * 5;
-		}
+			// determine what color the specular highlights should be based on the surface material's metallic
+			float3 spec = lerp(1,diffuse,hit.metallic);
+			// use the diffuse color or the specular color based on the fresnel
+			energy *= lerp(diffuse,spec,fresnel);
 
-		
+		}else
+			color += energy * SkyboxIntersect(ray) * 5;
 
-		// float phongSmoothness = pow(8192, min(max(0,hit.smoothness),1));
-		// float shinyness = pow(max(0, dot(-Sun.xyz, hit.normal)), phongSmoothness);
-
-		// diffuse = lerp(diffuse,1,shinyness);
-
-		//fresnels[i] = hit.distance < 1.#INF ? glossy : 0;
-
-		
-		// for(int j = 0; j < i; j++)
-		// 	f *= fresnels[j];
-		
-		
-		//energy += emission;
-		//color += energy * (1-f) * diffuse;
-
-		//energy *= f;
-
-		// color += energy * emission;		
-		// energy *= diffuse;
+		// if we are out of energy stop bouncing
 		if(!any(energy))
 			break;
 
-		if(!Bounce(ray, hit, spec, seed))
+		// if we did not hit a surface stop bouncing
+		if(!Bounce(ray, hit, seed))
 			break;
 	}
-	//int test = 0;
 
-	return color;
-
-	while(bounces <= MAX_BOUNCES){
-		HitInfo hit = RayCollision(ray); // Check ray collisions
-		if(hit.distance < 1.#INF){
-			
-			float fresnel = max(0,dot(hit.normal, -ray.direction));
-			// Bounce Ray
-			//Bounce(ray, hit, seed);
-
-			
-
-			// Compute Shadows
-			float3 light = sunLight ? -1*Sun.xyz : normalize(float3(0,10,0) - hit.hitPoint); // use directional sunlight or point light
-
-			Ray shadowRay = CreateRay(hit.hitPoint + hit.normal * 0.001, light); // fire ray toward light source
-			HitInfo shadowHit = RayCollision(shadowRay); // check shadow ray collisions
-
-			if(shadowHit.distance != 1.#INF){ // if the light is blocked
-				color *= 0.05 * hit.albedo; // the point is in shadow
-			}
-			else{ // ray is in direct light
-
-				float3 diffuse = max(0.05,saturate(dot(light, hit.normal))) * Sun.w * hit.albedo;
-
-				float s = pow(8192, min(max(0.1,hit.smoothness),0.9));
-				float glossy = pow(max(0, dot(light, hit.normal)), s);
-				
-
-				//color = fresnel;
-				color = lerp(color, diffuse, fresnel);
-				
-				float3 specular = lerp(diffuse, 1, glossy); // 
-				/*color = (hit.albedo / PI) + ((8 + s)/(8 * PI)) * (1 - hit.albedo) * specular;
-				color = max(0.05,saturate(-dot(Sun.xyz, hit.normal))) * Sun.w * color;*/
-				/*ray = Bounce(ray,hit,seed);
-				
-				PMaterial mat = hit.material;
-				incomingLight += (color * mat.emission) * mat.emissionStrength;
-				color *= mat.albedo;*/
-				/*if(!any(energy))
-					break;*/
-				
-			}
-
-			energy *= hit.smoothness;
-			// if(energy < 0.001)
-			// 	break;
-			
-		}
-		else{
-			//color = SkyboxIntersect(ray);
-			//color = lerp(color, SkyboxIntersect(ray), energy);
-			break;
-		}
-		bounces++;
-	}
-	//color /= bounces;
 	return color;
 }
 
-
-
-float3 Shade(inout Ray ray, HitInfo hit, inout uint seed){
-	if(hit.distance < 1.#INF){
-		ray.origin = hit.hitPoint + hit.normal * 0.001;
-		float3 diffuseRay = normalize(hit.normal + randomDirection(seed, hit.normal));
-		float3 specularRay = reflect(ray.direction, hit.normal);
-
-		ray.direction = lerp(diffuseRay, specularRay, hit.smoothness);
-
-
-		/*
-		ray.energy *= hit.specular;
-		Ray shadowRay = CreateRay(hit.hitPoint + hit.normal * 0.001, -1*Sun.xyz);
-		HitInfo shadowHit = FireRay(shadowRay);
-		if(shadowHit.distance != 1.#INF){
-			return 0.05 * hit.albedo;
-		}
-		
-		//float3 color = hit.albedo * hit.specular;
-		return saturate((-dot(Sun.xyz, hit.normal)) + 0.05) * Sun.w * hit.albedo;*/
-	}else{
-		ray.energy = 0.0;
-		return 0/*SkyboxIntersect(ray)*/;
-	}
-}
-
-[numthreads(8,8,1)]
-void CSMain (uint3 id : SV_DispatchThreadID)
-{
+// Main compute shader function
+[numthreads(TILE_SIZE,TILE_SIZE,2)]
+void CSMain (uint3 id : SV_DispatchThreadID){
+	// pixel space transformed to uv space
 	uint width, height;
 	Result.GetDimensions(width,height);
 	uint index = (id.x + id.y * width);
-	uint rngState = index;
 	float2 uv = float2((id.xy) / float2(width,height) * 2.0 - 1.0);
 
+	uint rngState = index;
+
 	Ray camRay = CreateCameraRay(uv);
-	float3 randRay = randomDirection(rngState, camRay.direction);
-	float jitter = SAMPLES == 1 ? 0 : 0.0003;
-	float3 dir = lerp(camRay.direction, randRay, 0);
-	Ray ray = CreateRay(camRay.origin, dir);
-	//float3 color = float4(0.4,0.58,0.93,1.0);
-	float3 color = 0;
+
+	float3 color;
+	// samples determine how many checks are performed for each pixel on the screen
 	int samples = 18;
-	for(int i = 0; i < samples; i++){
-		color += FireRay(ray,rngState);
-	}
-	// color += FireRay(ray,rngState);
-	// color += FireRay(ray,rngState);
-	// color += FireRay(ray,rngState);
-	// color += FireRay(ray,rngState);
+	for(int i = 0; i < samples; i++)
+		color += FireRay(camRay,rngState);
 	color /= samples;
 
     Result[id.xy] = float4(color, 1);
-	//Result[id.xy] /= 2;
-    //Result[id.xy] = float4(id.x & id.y, (id.x & 15)/15.0, (id.y & 15)/15.0, 0.0);
-    //Result[id.xy] = float4(0.4,0.58,0.93,1.0);
-	//Result[id.xy] = float4(random(index),1);
-	//Result[id.xy] = float4(ray.direction, 1);
-	if(id.x < 1024 && id.y < 1024){
-		//Result[id.xy] = float4(Tex[id.xy].xyz,1);
-		//Result[id.xy] = float4(Materials[float3(id.xy,MeshIndex[0].material)].xyz,1);
-		//Result[id.xy] = MeshIndex[1].material;
-	}
 }
