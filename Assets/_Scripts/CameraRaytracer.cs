@@ -26,7 +26,8 @@ public class CameraRaytracer : MonoBehaviour
 	// Compute shader init
 	private RenderTexture rt;
 	[SerializeField] private ComputeShader rayTracingShader;
-	[SerializeField] private int TILE_SIZE = 8;
+	[SerializeField, Tooltip("Pixel width/height of tiles, number of threads run in parallel on GPU is square of value")]
+	private int TILE_SIZE = 8;
 
 	// World objects
 	Camera cam;
@@ -36,7 +37,7 @@ public class CameraRaytracer : MonoBehaviour
 	[SerializeField] private bool sunLight = true;
 	[SerializeField] private Light sun;
 	[SerializeField] bool useBB = true;
-	[SerializeField] bool fastMath = false;
+	[SerializeField, Tooltip("DEPRECATED: Always on")] bool fastMath = false;
 
 	static int TEXTURE_WIDTH = 1024;
 	static int TEXTURE_HEIGHT = 1024;
