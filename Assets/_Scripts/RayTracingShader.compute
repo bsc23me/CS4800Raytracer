@@ -4,7 +4,7 @@
 // Output RenderTexture
 RWTexture2D<float4> Result;
 
-#define MAX_BOUNCES 3
+#define MAX_BOUNCES 5
 #define TILE_SIZE 8
 #define PI 3.14159265
 
@@ -269,10 +269,10 @@ float3 SkyboxIntersect(Ray ray){
 
 	// looking above horizon
 	float y = ray.direction.y; // V sky is gradient from dark to light | V ground is mid gray
-	float3 sky = y > 0 ? float3(0.4*(1-y)*(1-y), 0.8*(1-y)*(1-y), 1.0) : 0.4;
-
+	//float3 sky = y > 0 ? float3(0.4*(1-y)*(1-y), 0.8*(1-y)*(1-y), 1.0) : 0.4;
+	float3 sky = y > 0 ? lerp(float3(0.4,0.8,1),1,pow(1-y,2)) : 0.4;
 	float sun = pow(max(0, dot(ray.direction,-Sun.xyz)), 32);
-	return lerp(sky, 1, sun);
+	return lerp(sky, float3(1,1,0.9), sun);
 }
 
 // Checks if a ray intersects a box
@@ -461,7 +461,7 @@ float3 FireRay(Ray ray, inout uint seed){
 			energy *= lerp(diffuse,spec,fresnel);
 
 		}else
-			color += energy * SkyboxIntersect(ray) * 5;
+			color += energy * SkyboxIntersect(ray) * 50;
 
 		// if we are out of energy stop bouncing
 		if(!any(energy))
@@ -488,9 +488,9 @@ void CSMain (uint3 id : SV_DispatchThreadID){
 
 	Ray camRay = CreateCameraRay(uv);
 
-	float3 color;
+	float3 color = 0;
 	// samples determine how many checks are performed for each pixel on the screen
-	int samples = 18;
+	int samples = 5;
 	for(int i = 0; i < samples; i++)
 		color += FireRay(camRay,rngState);
 	color /= samples;
