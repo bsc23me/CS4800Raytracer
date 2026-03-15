@@ -317,6 +317,7 @@ void PlaneIntersect(Ray ray, Plane plane, inout HitInfo hit){
 			hit.hitPoint = ray.origin + t * ray.direction;
 			hit.normal = plane.normal;
 			hit.distance = t;
+			hit.smoothness = 0;
 			//updateHitMaterial(hit, plane.material, 0);
 			hit.albedo = int(bool(floor(CHECKERBOARD_SCALE * hit.hitPoint.x) % 2) ^ bool(floor(CHECKERBOARD_SCALE * hit.hitPoint.z) % 2));
 		}
@@ -436,6 +437,7 @@ HitInfo RayCollision(Ray ray){
 float3 FireRay(Ray ray, inout uint seed){
 	float3 color = 0;
 	float3 energy = 1;
+	float3 persistance = 1;
 
 	for(int i = 0; i < MAX_BOUNCES; i++){
 		HitInfo hit = RayCollision(ray);
@@ -448,31 +450,44 @@ float3 FireRay(Ray ray, inout uint seed){
 			if(shadowHit.distance < 1.#INF) // if the light is blocked
 				diffuse *= 0.05; // the point is in shadow
 			else
-				diffuse *= max(0.05,saturate(dot(-1*Sun.xyz, hit.normal))) * Sun.w; // shading handled by Lampertian cosine
+				diffuse *= max(0.05,dot(normalize(-Sun.xyz), hit.normal)) * Sun.w; // shading handled by Lampertian cosine
 
 			// strength of the fresnel is determined by the smoothness of the material
 			float s = pow(8192, saturate(1-hit.smoothness));
+			float fresnelPower = 0.05;
 			// fresnel is computed based on the angle between the camera ray and the surface normal
-			float fresnel = pow(clamp(1-saturate(dot(-ray.direction, hit.normal)), 0, 0.999), s);
+			float fresnel = lerp(pow(abs(hit.smoothness), 10), 1, fresnelPower*(1-dot(normalize(-ray.direction), hit.normal)));
 
 			// determine what color the specular highlights should be based on the surface material's metallic
 			float3 spec = lerp(1,diffuse,hit.metallic);
 			// use the diffuse color or the specular color based on the fresnel
-			energy *= lerp(diffuse,spec,fresnel);
+			//energy *= lerp(diffuse,spec,fresnel);
+			float3 PFromS = lerp(1,0.9,hit.smoothness);
+			float3 matP = lerp(PFromS,0,hit.metallic);
+			float3 metalSpec = lerp(1,diffuse,hit.metallic);
+			float3 p = matP;
+
+			//spec = diffuse;
+			energy *= spec * fresnel;
+			color += diffuse * p * persistance;
+			persistance *= (1-p) * metalSpec;
+
+
+			Bounce(ray, hit, seed);
 
 		}else
-			color += energy * SkyboxIntersect(ray) * 5;
+			color += persistance * SkyboxIntersect(ray) * 0.3;
 
 		// if we are out of energy stop bouncing
 		if(!any(energy))
 			break;
 
 		// if we did not hit a surface stop bouncing
-		if(!Bounce(ray, hit, seed))
-			break;
+		//if(!Bounce(ray, hit, seed))
+		//	break;
 	}
 
-	return color;
+	return saturate(color);
 }
 
 // Main compute shader function
@@ -490,7 +505,7 @@ void CSMain (uint3 id : SV_DispatchThreadID){
 
 	float3 color;
 	// samples determine how many checks are performed for each pixel on the screen
-	int samples = 18;
+	int samples = 5;
 	for(int i = 0; i < samples; i++)
 		color += FireRay(camRay,rngState);
 	color /= samples;
