@@ -400,7 +400,7 @@ bool Bounce(inout Ray ray, HitInfo hit, inout uint seed){
 		// Direction determined by surface material properties
 		float3 diffuseRay = normalize(hit.normal + randomDirection(seed, hit.normal));
 		float3 specularRay = reflect(ray.direction, hit.normal);
-		ray.direction = lerp(diffuseRay, specularRay, hit.smoothness);
+		ray.direction = lerp(diffuseRay, specularRay, 1/*hit.smoothness*/);
 
 		return true;
 	}
@@ -476,7 +476,7 @@ float3 FireRay(Ray ray, inout uint seed){
 			Bounce(ray, hit, seed);
 
 		}else
-			color += persistance * SkyboxIntersect(ray) * 0.3;
+			color += persistance * SkyboxIntersect(ray) * 1;
 
 		// if we are out of energy stop bouncing
 		if(!any(energy))
@@ -505,7 +505,7 @@ void CSMain (uint3 id : SV_DispatchThreadID){
 
 	float3 color;
 	// samples determine how many checks are performed for each pixel on the screen
-	int samples = 5;
+	int samples = 2;
 	for(int i = 0; i < samples; i++)
 		color += FireRay(camRay,rngState);
 	color /= samples;

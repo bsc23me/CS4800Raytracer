@@ -11,6 +11,8 @@ public class CameraMovement : MonoBehaviour
 	[SerializeField] private float speed = 4f;
 
 	[SerializeField] private float radius = 10f;
+	[SerializeField] private float height = 3f;
+	[SerializeField] private float objectHeight = 1f;
 
     // Start is called before the first frame update
     void Start()
@@ -23,10 +25,10 @@ public class CameraMovement : MonoBehaviour
     {
 		if (trackCam) // Set if camera is on a set track with fixed speed
 		{
-			Vector3 center = Vector3.zero;
+			Vector3 center = Vector3.up * objectHeight;
 			
 			// Move camera in a circle around the center
-			Vector3 target = new Vector3(radius * Mathf.Cos(Time.time),1, radius * Mathf.Sin(Time.time)) + center;
+			Vector3 target = new Vector3(radius * Mathf.Cos(Time.time),height, radius * Mathf.Sin(Time.time)) + center;
 			transform.position = target;
 			transform.LookAt(center);
 		}

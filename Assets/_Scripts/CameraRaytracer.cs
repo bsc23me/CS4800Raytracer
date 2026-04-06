@@ -366,6 +366,8 @@ public class CameraRaytracer : MonoBehaviour
 				LoadTexture(renderer.material, "_MetallicGlossMap", defaults[1]);
 			}
 		}
+		
+		Debug.Log(staticTriangles.Count);
 
 		ConvertTextures();
 	}
@@ -468,10 +470,40 @@ public class CameraRaytracer : MonoBehaviour
 	/// </summary>
 	void ConvertTextures()
 	{
+		byte[] pixels;
 		// Convert texture array to 3D texture to pass to GPU => put in LoadTextures() => LoadScene() ?
-		byte[] pixels = new byte[textures.Count * TEXTURE_SIZE];
-		for (int i = 0; i < textures.Count; i++)
-			Array.Copy(textures[i].GetRawTextureData(), 0, pixels, i * TEXTURE_SIZE, TEXTURE_SIZE);
+		if (true)
+		{
+			long total = 0;
+			int[] sizes = new int[textures.Count];
+			for (int i = 0; i < textures.Count; i++)
+			{
+				sizes[i] = textures[i].width * textures[i].height;
+				total += sizes[i] * sizeof(int);
+			}
+			pixels = new byte[total];
+			try
+			{
+				total = 0;
+				for (int i = 0; i < textures.Count; i++)
+				{
+					Array.Copy(textures[i].GetRawTextureData(), 0, pixels, total, sizes[i] * sizeof(int) - 1);
+					total += sizes[i] * sizeof(int);
+				}
+			}
+			catch (Exception ex)
+			{
+				Debug.LogError($"textures[0] length: {textures[0].GetRawTextureData().Length}, sizes[0] length: {sizes[0] * sizeof(int)}");
+			}
+		}
+		else
+		{
+			pixels = new byte[textures.Count * TEXTURE_SIZE];
+			for (int i = 0; i < textures.Count; i++)
+			{
+				Array.Copy(textures[i].GetRawTextureData(), 0, pixels, i * TEXTURE_SIZE, TEXTURE_SIZE);
+			}
+		}
 
 		staticTextures = new Texture3D(TEXTURE_WIDTH, TEXTURE_HEIGHT, textures.Count, TextureFormat.RGBA32, false);
 		staticTextures.SetPixelData(pixels, 0);

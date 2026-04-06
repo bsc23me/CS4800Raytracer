@@ -12,8 +12,13 @@ public class DebugStats : MonoBehaviour
 
     void Start()
     {
-		UpdateText();
+		//UpdateText();
     }
+
+	private void Update()
+	{
+		text.text = debugStats();
+	}
 
 	/// <summary>
 	/// lists previous frame's delta time and the current framerate
@@ -22,7 +27,7 @@ public class DebugStats : MonoBehaviour
 	string debugStats()
 	{
 		float t = Time.deltaTime;
-		float fr = 1 / t;
+		float fr = Mathf.Floor(1 / t);
 		return $"Δt: {t}\nFramerate: {fr}";
 	}
 
